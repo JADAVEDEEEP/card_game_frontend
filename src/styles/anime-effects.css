@@ -1,0 +1,141 @@
+/* Simplified Anime-Style Effects */
+
+@keyframes gentle-float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+@keyframes subtle-glow {
+  0%, 100% {
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  }
+  50% {
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15),
+                0 0 20px var(--theme-secondary);
+  }
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Simple Card Hover */
+.anime-card {
+  transition: all 0.3s ease;
+  border-width: 2px;
+}
+
+.anime-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+  border-color: var(--theme-accent);
+}
+
+/* Gentle Float */
+.gentle-float {
+  animation: gentle-float 3s ease-in-out infinite;
+}
+
+/* Subtle Glow on Hover */
+.subtle-glow:hover {
+  animation: subtle-glow 2s ease-in-out infinite;
+}
+
+/* Themed Backgrounds */
+.bg-theme {
+  background-color: var(--theme-bg);
+}
+
+.bg-theme-secondary {
+  background-color: var(--theme-bg-secondary);
+}
+
+.bg-theme-primary {
+  background-color: var(--theme-primary);
+}
+
+/* Text Styles */
+.text-theme-primary {
+  color: var(--theme-primary);
+}
+
+.text-theme-secondary {
+  color: var(--theme-secondary);
+}
+
+.text-theme-accent {
+  color: var(--theme-accent);
+}
+
+.text-theme-light {
+  color: var(--theme-text-light);
+}
+
+/* Border Styles */
+.border-theme-primary {
+  border-color: var(--theme-primary);
+}
+
+.border-theme-secondary {
+  border-color: var(--theme-secondary);
+}
+
+.border-theme-accent {
+  border-color: var(--theme-accent);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--theme-bg-secondary);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, var(--theme-secondary), var(--theme-accent));
+  border-radius: 10px;
+  border: 2px solid var(--theme-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, var(--theme-accent), var(--theme-secondary));
+}
+
+/* Firefox Scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--theme-secondary) var(--theme-bg-secondary);
+}
+
+/* Simple Slide In Animation */
+.slide-in {
+  animation: slide-in 0.3s ease-out;
+}
+
+/* Icon Container */
+.icon-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  transition: all 0.3s ease;
+}
+
+.icon-container:hover {
+  transform: scale(1.1) rotate(5deg);
+}

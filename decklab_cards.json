@@ -1,0 +1,59 @@
+[
+  {
+    "id": "OP15-002",
+    "pack_id": null,
+    "name": "",
+    "rarity": "",
+    "category": "",
+    "img_url": "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/one-piece/OP15/OP15-002_EN.webp",
+    "img_full_url": "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/one-piece/OP15/OP15-002_EN.webp",
+    "colors": [
+      ""
+    ],
+    "cost": null,
+    "attributes": [],
+    "power": null,
+    "counter": null,
+    "types": [],
+    "effect": "Lucy\n            OP15-002\n        \n\n        \n            Leader\n            • Red/Blue\n             • 4 Life\n                    \n    \n\n            \n            5000 Power\n            • Strike\n                    \n    \n    \n                    [When Attacking]/[On Your Opponent's Attack] You may trash any number of Event or Stage cards from your hand. This Leader gains +1000 power during this battle for every card trashed.[Activate: Main] [Once Per Turn] If you have activated an Event with a base cost of 3 or more during this turn, draw 1 card.\n        \n        \n    \n\n    \n        Dressrosa/Revolutionary Army\n    \n\n            \n            Illustrated by \n            \n                He Ziwei",
+    "trigger": null
+  },
+  {
+    "id": "OP15-058",
+    "pack_id": null,
+    "name": "",
+    "rarity": "",
+    "category": "",
+    "img_url": "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/one-piece/OP15/OP15-058_EN.webp",
+    "img_full_url": "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/one-piece/OP15/OP15-058_EN.webp",
+    "colors": [
+      ""
+    ],
+    "cost": null,
+    "attributes": [],
+    "power": null,
+    "counter": null,
+    "types": [],
+    "effect": "Enel\n            OP15-058\n        \n\n        \n            Leader\n            • Purple\n             • 5 Life\n                    \n    \n\n            \n            5000 Power\n            • Special\n                    \n    \n    \n                    Under the rules of this game, your DON!! deck consists of 6 cards.[Activate: Main] [Once Per Turn] If it is your second turn or later, add up to 1 DON!! card from your DON!! deck and set it as active, and add up to 4 additional DON!! cards and rest them. Then, give up to 4 rested DON!! cards to 1 of your Characters.\n        \n        \n    \n\n    \n        Sky Island\n    \n\n            \n            Illustrated by \n            \n                Zhiguang Liu",
+    "trigger": null
+  },
+  {
+    "id": "OP15-098",
+    "pack_id": null,
+    "name": "",
+    "rarity": "",
+    "category": "",
+    "img_url": "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/one-piece/OP15/OP15-098_EN.webp",
+    "img_full_url": "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/one-piece/OP15/OP15-098_EN.webp",
+    "colors": [
+      ""
+    ],
+    "cost": null,
+    "attributes": [],
+    "power": null,
+    "counter": null,
+    "types": [],
+    "effect": "Monkey.D.Luffy\n            OP15-098\n        \n\n        \n            Leader\n            • Yellow\n             • 5 Life\n                    \n    \n\n            \n            5000 Power\n            • Strike\n                    \n    \n    \n                    If your {Sky Island} type Character with 6000 base power or more would be removed from the field by your opponent, you may add 1 card from the top of your Life cards to your hand instead.\n        \n        \n    \n\n    \n        Sky Island/Straw Hat Crew\n    \n\n            \n            Illustrated by \n            \n                Midori Matsuda",
+    "trigger": null
+  }
+]

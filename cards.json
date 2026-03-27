@@ -1,0 +1,17 @@
+{
+  "id": "OP15-022",
+  "pack_id": "OP15",
+  "name": "Brook",
+  "rarity": "Leader",
+  "category": "Leader",
+  "img_url": "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/one-piece/OP15/OP15-022_EN.webp",
+  "img_full_url": "https://limitlesstcg.nyc3.cdn.digitaloceanspaces.com/one-piece/OP15/OP15-022_EN.webp",
+  "colors": ["Green"],
+  "cost": null,
+  "attributes": ["Slash"],
+  "power": 5000,
+  "counter": null,
+  "types": ["Straw Hat Crew"],
+  "effect": "Under the rules of this game, you do not lose when your deck has 0 cards. You lose at the end of the turn in which your deck becomes 0 cards.\n\n[Activate: Main] [Once Per Turn] Trash 4 cards from the top of your deck. Then, if your deck has 0 cards, set up to 1 of your Characters as active.",
+  "trigger": null
+}
