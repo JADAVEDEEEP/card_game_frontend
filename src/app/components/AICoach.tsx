@@ -1,1206 +1,1023 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, BarChart3, Brain, Compass, Crown, Download, LoaderCircle, Save, Search, Sparkles, X } from "lucide-react";
+import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Brain, Target, AlertCircle, Lightbulb, Compass, Sword, Shield, TrendingUp, Activity, Heart, Users, Zap, ChevronRight, BarChart3, Crown, Layers, Download, RefreshCw } from "lucide-react";
-import { useState } from "react";
-import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, LineChart, Line } from "recharts";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { withApiBase } from "../data/apiBase";
+
+type ApiCard = {
+  id?: string;
+  name?: string;
+  category?: string;
+  colors?: string[];
+  cost?: number | string;
+  power?: number | string;
+  counter?: number | string;
+  effect?: string;
+  trigger?: string;
+  rarity?: string;
+  pack_id?: string;
+};
+
+type CardData = {
+  id: string;
+  name: string;
+  number: string;
+  type: "Character" | "Event" | "Stage" | "Leader";
+  color: string;
+  cost: number;
+  power?: number;
+  counter?: number;
+  effect: string;
+  rarity?: string;
+  setCode?: string;
+  imageUrl?: string;
+};
+
+type CoachMove = {
+  title: string;
+  plan: string;
+  winProbability: number;
+  riskLevel: "Low" | "Medium" | "High";
+  cardAdvantage: string;
+  actions: string[];
+};
+
+type CoachAnalysis = {
+  summary: string;
+  bestMove: CoachMove;
+  aggressiveMove: CoachMove;
+  safeMove: CoachMove;
+  boardInsight: string;
+  resourceInsight: string;
+  riskWarnings: string[];
+  nextTurns: Array<{ turnLabel: string; action: string; outcome: string; winProbability: number }>;
+};
+
+type OptimizeAnalysis = {
+  weaknesses?: string[];
+  recommendedCards?: Array<{ cardName: string; cardId: string; explanation: string }>;
+  nextBestSwaps?: Array<{
+    remove: { cardName: string; cardId: string };
+    add: { cardName: string; cardId: string };
+    reason: string;
+    expectedImpact: number;
+  }>;
+  consistencyScore?: { score?: number };
+  metaFitScore?: { score?: number };
+  synergyScore?: { score?: number; archetype?: string };
+  deck_power?: { score: number; tier: string };
+};
+
+const STORAGE_KEY = "learningGuide_aiCoachDeckLab";
+const COLORS = ["#ec4899", "#8b5cf6", "#14b8a6"];
+const COLOR_OPTIONS = ["all", "red", "blue", "green", "purple", "black", "yellow"];
+const TYPE_OPTIONS = ["all", "leader", "character", "event", "stage"];
+
+const toNumber = (value: unknown, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const safeJsonParse = <T,>(value: string | null, fallback: T): T => {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+};
+
+const toCardData = (card: ApiCard): CardData => ({
+  id: String(card.id || "").trim(),
+  name: String(card.name || "Unknown Card").trim(),
+  number: String(card.id || "").trim(),
+  type: (String(card.category || "Character").trim() as CardData["type"]) || "Character",
+  color: Array.isArray(card.colors) ? card.colors.join("/") : "",
+  cost: toNumber(card.cost, 0),
+  power: card.power ? toNumber(card.power, 0) : undefined,
+  counter: card.counter ? toNumber(card.counter, 0) : undefined,
+  effect: [String(card.effect || "").trim(), String(card.trigger || "").trim()].filter(Boolean).join(" | "),
+  rarity: String(card.rarity || "").trim() || undefined,
+  setCode: String(card.pack_id || "").trim() || undefined,
+  imageUrl: card.id ? withApiBase(`/cardsApi/image/${encodeURIComponent(String(card.id).trim())}`) : undefined,
+});
+
+const leaderLabel = (leader: CardData | null) => {
+  if (!leader) return "";
+  return `${leader.name} (${leader.color || "Unknown"})`;
+};
 
 export function AICoach() {
-  const [yourLife, setYourLife] = useState("3");
-  const [oppLife, setOppLife] = useState("2");
-  const [yourHand, setYourHand] = useState("4");
-  const [oppHand, setOppHand] = useState("2");
-  const [donAvailable, setDonAvailable] = useState("8");
-  const [attackers, setAttackers] = useState("2");
-  const [blockers, setBlockers] = useState("1");
-  const [restedChars, setRestedChars] = useState("1");
-  const [triggerDeck, setTriggerDeck] = useState(false);
-  const [aggressiveMode, setAggressiveMode] = useState(false);
-  const [defensiveMode, setDefensiveMode] = useState(false);
-  const [turnNumber, setTurnNumber] = useState("5");
-  const [selectedLeader, setSelectedLeader] = useState("");
-  const [showRecommendation, setShowRecommendation] = useState(false);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
+  const [allCards, setAllCards] = useState<CardData[]>([]);
+  const [selectedLeader, setSelectedLeader] = useState<CardData | null>(null);
+  const [deckCards, setDeckCards] = useState<Map<string, number>>(new Map());
+  const [searchTerm, setSearchTerm] = useState("");
+  const [colorFilter, setColorFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [visibleCount, setVisibleCount] = useState(60);
+  const [loadingCards, setLoadingCards] = useState(true);
+  const [loadingError, setLoadingError] = useState<string | null>(null);
+
+  const [analysis, setAnalysis] = useState<CoachAnalysis | null>(null);
+  const [optimizeAnalysis, setOptimizeAnalysis] = useState<OptimizeAnalysis | null>(null);
+  const [providerInfo, setProviderInfo] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  
-  // New state for imported cards from Card Action Intelligence
-  const [importedCards, setImportedCards] = useState<any[]>([]);
-  const [importedLeader, setImportedLeader] = useState<any>(null);
-  const [showImportedCards, setShowImportedCards] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [optimizeStatus, setOptimizeStatus] = useState("");
+  const [saveStatus, setSaveStatus] = useState("");
+  const [importStatus, setImportStatus] = useState("");
 
-  const handleAnalyze = () => {
-    setIsAnalyzing(true);
-    setTimeout(() => {
-      setIsAnalyzing(false);
-      setShowRecommendation(true);
-    }, 2000);
-  };
-  
-  // Function to fetch cards from Card Action Intelligence
-  const handleFetchCards = () => {
-    try {
-      const storedCards = localStorage.getItem('cardActionIntelligence_selectedCards');
-      const storedLeader = localStorage.getItem('cardActionIntelligence_selectedLeader');
-      
-      if (storedCards) {
-        const parsedCards = JSON.parse(storedCards);
-        const validCards = parsedCards.filter((card: any) => card !== null);
-        setImportedCards(validCards);
-        setShowImportedCards(true);
-      }
-      
-      if (storedLeader) {
-        const parsedLeader = JSON.parse(storedLeader);
-        setImportedLeader(parsedLeader);
-        if (parsedLeader) {
-          setSelectedLeader(parsedLeader.name);
+  useEffect(() => {
+    const loadCards = async () => {
+      setLoadingCards(true);
+      setLoadingError(null);
+      try {
+        const response = await fetch(withApiBase("/cardsApi/cards"));
+        const data = response.ok ? ((await response.json()) as ApiCard[]) : [];
+        const normalized = data.map(toCardData).filter((card) => card.id && card.name);
+        setAllCards(normalized);
+
+        const stored = safeJsonParse<{
+          selectedLeader: CardData | null;
+          deckEntries: Array<{ cardId: string; count: number }>;
+        } | null>(localStorage.getItem(STORAGE_KEY), null);
+
+        if (stored?.selectedLeader?.id) {
+          const matchedLeader = normalized.find((card) => card.id === stored.selectedLeader?.id) || stored.selectedLeader;
+          setSelectedLeader(matchedLeader);
         }
+
+        if (Array.isArray(stored?.deckEntries)) {
+          const nextDeck = new Map<string, number>();
+          stored.deckEntries.forEach((entry) => {
+            const matched = normalized.find((card) => card.id === entry.cardId);
+            if (!matched || matched.type === "Leader") return;
+            nextDeck.set(matched.id, Math.max(1, Math.min(4, Number(entry.count || 1))));
+          });
+          setDeckCards(nextDeck);
+        }
+      } catch (fetchError) {
+        setLoadingError(fetchError instanceof Error ? fetchError.message : "Failed to load cards API.");
+      } finally {
+        setLoadingCards(false);
       }
-    } catch (error) {
-      console.error('Error fetching cards:', error);
+    };
+
+    void loadCards();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        selectedLeader,
+        deckEntries: Array.from(deckCards.entries()).map(([cardId, count]) => ({ cardId, count })),
+      })
+    );
+  }, [selectedLeader, deckCards]);
+
+  useEffect(() => {
+    setVisibleCount(60);
+  }, [searchTerm, colorFilter, typeFilter]);
+
+  const filteredCards = useMemo(() => {
+    const search = searchTerm.trim().toLowerCase();
+    return allCards.filter((card) => {
+      const matchesSearch =
+        !search ||
+        card.name.toLowerCase().includes(search) ||
+        card.number.toLowerCase().includes(search);
+      const matchesColor = colorFilter === "all" || card.color.toLowerCase().includes(colorFilter);
+      const matchesType = typeFilter === "all" || card.type.toLowerCase() === typeFilter;
+      return matchesSearch && matchesColor && matchesType;
+    });
+  }, [allCards, searchTerm, colorFilter, typeFilter]);
+
+  const visibleCards = filteredCards.slice(0, visibleCount);
+  const cardById = useMemo(() => new Map(allCards.map((card) => [card.id, card])), [allCards]);
+  const selectedDeckCards = useMemo(
+    () =>
+      Array.from(deckCards.entries())
+        .map(([cardId, count]) => {
+          const card = cardById.get(cardId);
+          return card ? { card, count } : null;
+        })
+        .filter((entry): entry is { card: CardData; count: number } => Boolean(entry)),
+    [deckCards, cardById]
+  );
+
+  const totalCards = Array.from(deckCards.values()).reduce((sum, count) => sum + count, 0);
+  const uniqueCards = deckCards.size;
+  const averageCost =
+    totalCards === 0
+      ? 0
+      : selectedDeckCards.reduce((sum, entry) => sum + entry.card.cost * entry.count, 0) / totalCards;
+  const counterCards = selectedDeckCards.reduce((sum, entry) => sum + ((entry.card.counter || 0) > 0 ? entry.count : 0), 0);
+  const counterDensity = totalCards === 0 ? 0 : Math.round((counterCards / totalCards) * 100);
+  const characterCount = selectedDeckCards.reduce((sum, entry) => sum + (entry.card.type === "Character" ? entry.count : 0), 0);
+  const eventCount = selectedDeckCards.reduce((sum, entry) => sum + (entry.card.type === "Event" ? entry.count : 0), 0);
+  const stageCount = selectedDeckCards.reduce((sum, entry) => sum + (entry.card.type === "Stage" ? entry.count : 0), 0);
+
+  const curveBuckets: Record<string, number> = { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6+": 0 };
+  selectedDeckCards.forEach((entry) => {
+    const key = entry.card.cost >= 6 ? "6+" : String(Math.max(0, entry.card.cost));
+    curveBuckets[key] += entry.count;
+  });
+  const curveData = Object.entries(curveBuckets).map(([cost, count]) => ({ cost, count }));
+
+  const moveData = analysis
+    ? [
+        { name: "Best", value: analysis.bestMove.winProbability },
+        { name: "Aggressive", value: analysis.aggressiveMove.winProbability },
+        { name: "Safe", value: analysis.safeMove.winProbability },
+      ]
+    : [];
+
+  const analyticsWinRate = useMemo(() => {
+    if (optimizeAnalysis?.metaFitScore?.score) {
+      return Math.max(1, Math.min(99, Math.round(optimizeAnalysis.metaFitScore.score)));
+    }
+    if (analysis?.bestMove?.winProbability) {
+      return analysis.bestMove.winProbability;
+    }
+    const base = 38 + Math.min(22, Math.round(averageCost * 4)) + Math.min(18, Math.round(counterDensity / 4));
+    return Math.max(1, Math.min(99, base));
+  }, [optimizeAnalysis, analysis, averageCost, counterDensity]);
+
+  const pilotProfile = useMemo(() => {
+    if (eventCount >= 10 && averageCost <= 3) {
+      return {
+        title: "Technical Tempo Player",
+        note: "Jo player sequencing, resource trading aur fast decision making me strong ho uske liye ye deck fit hai.",
+      };
+    }
+    if (stageCount >= 4 || averageCost >= 4) {
+      return {
+        title: "Patient Control Player",
+        note: "Jo player slow setup, value planning aur long game enjoy karta hai uske liye ye build better hai.",
+      };
+    }
+    if (characterCount >= 28 && counterDensity <= 35) {
+      return {
+        title: "Aggressive Pressure Player",
+        note: "Jo player proactive attacks aur board pressure se game close karta hai uske liye ye deck zyada natural lagega.",
+      };
+    }
+    return {
+      title: "Balanced Midrange Player",
+      note: "Jo player adaptable lines choose karta hai aur attack aur defense dono mix me khelta hai uske liye ye build accha rahega.",
+    };
+  }, [eventCount, averageCost, stageCount, characterCount, counterDensity]);
+
+  const analyticsChartData = useMemo(
+    () => [
+      { name: "Estimated Win %", value: analyticsWinRate },
+      { name: "Consistency", value: optimizeAnalysis?.consistencyScore?.score || Math.max(20, 100 - Math.abs(averageCost * 14 - 42)) },
+      { name: "Counter Density", value: counterDensity },
+    ],
+    [analyticsWinRate, optimizeAnalysis, averageCost, counterDensity]
+  );
+
+  const addCard = (card: CardData) => {
+    if (card.type === "Leader") {
+      setSelectedLeader(card);
+      return;
+    }
+    const current = deckCards.get(card.id) || 0;
+    if (current >= 4 || totalCards >= 50) return;
+    const nextDeck = new Map(deckCards);
+    nextDeck.set(card.id, current + 1);
+    setDeckCards(nextDeck);
+  };
+
+  const removeCard = (card: CardData) => {
+    const current = deckCards.get(card.id) || 0;
+    if (current <= 0) return;
+    const nextDeck = new Map(deckCards);
+    if (current === 1) nextDeck.delete(card.id);
+    else nextDeck.set(card.id, current - 1);
+    setDeckCards(nextDeck);
+  };
+
+  const analyticsPayload = () => ({
+    leader: selectedLeader
+      ? {
+          card_code: selectedLeader.id,
+          name: selectedLeader.name,
+          color: selectedLeader.color,
+          type: selectedLeader.type.toLowerCase(),
+          cost: selectedLeader.cost,
+          power: selectedLeader.power || 0,
+          counter: selectedLeader.counter || 0,
+          effect: selectedLeader.effect,
+        }
+      : null,
+    deck_size: totalCards,
+    decklist: selectedDeckCards.map((entry) => ({
+      card_code: entry.card.id,
+      count: entry.count,
+      card: {
+        card_code: entry.card.id,
+        id: entry.card.id,
+        name: entry.card.name,
+        cost: entry.card.cost,
+        power: entry.card.power || 0,
+        type: entry.card.type.toLowerCase(),
+        color: entry.card.color.toLowerCase() || "red",
+        counter: entry.card.counter || 0,
+        effect: entry.card.effect,
+        rarity: entry.card.rarity || "-",
+        set_code: entry.card.setCode || "SET",
+        image_url: "",
+      },
+    })),
+  });
+
+  const handleRunAnalytics = async () => {
+    if (!selectedLeader) return void setOptimizeStatus("Leader select karo, phir analytics run karo.");
+    if (totalCards === 0) return void setOptimizeStatus("Deck me cards add karo, phir analytics run karo.");
+
+    setOptimizing(true);
+    setOptimizeStatus("Deck analytics load ho rahi hai...");
+    try {
+      const response = await fetch(withApiBase("/analytics/optimize"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(analyticsPayload()),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.message || `Analytics API failed (${response.status})`);
+      setOptimizeAnalysis(payload as OptimizeAnalysis);
+      setOptimizeStatus("Deck analytics ready.");
+    } catch (fetchError) {
+      setOptimizeAnalysis(null);
+      setOptimizeStatus(fetchError instanceof Error ? fetchError.message : "Deck analytics failed.");
+    } finally {
+      setOptimizing(false);
     }
   };
-  
-  const handleRefreshCards = () => {
-    handleFetchCards();
-  };
 
-  // Leader options
-  const leaders = [
-    "Monkey D. Luffy (Red)",
-    "Roronoa Zoro (Green)",
-    "Nami (Blue)",
-    "Trafalgar Law (Purple)",
-    "Charlotte Katakuri (Yellow)",
-    "Kaido (Black)",
-    "Eustass Kid (Red/Purple)",
-    "Sanji (Yellow/Black)"
-  ];
+  const handleAnalyze = async () => {
+    if (!selectedLeader) {
+      setAiError("Leader select karo before AI analysis.");
+      setAnalysis(null);
+      return;
+    }
+    if (totalCards === 0) {
+      setAiError("Deck me kuch cards add karo before AI analysis.");
+      setAnalysis(null);
+      return;
+    }
 
-  // Mock battlefield data
-  const [yourCharacters] = useState([
-    { id: 1, name: "Zoro", power: 6000, cost: 4, active: true, hasAbility: true },
-    { id: 2, name: "Sanji", power: 5000, cost: 3, active: true, hasAbility: false },
-    { id: 3, name: "Nami", power: 3000, cost: 2, active: false, hasAbility: true },
-    { id: 4, name: "", power: 0, cost: 0, active: true, hasAbility: false },
-    { id: 5, name: "", power: 0, cost: 0, active: true, hasAbility: false },
-  ]);
+    setIsAnalyzing(true);
+    setAiError(null);
+    try {
+      const response = await fetch(withApiBase("/ai/coach"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          selectedLeader: leaderLabel(selectedLeader),
+          turnNumber: 4,
+          yourLife: 4,
+          oppLife: 4,
+          yourHand: 5,
+          oppHand: 5,
+          donAvailable: Math.min(10, Math.max(1, Math.round(averageCost + 2))),
+          attackers: Math.min(5, Math.max(1, Math.round(characterCount / 10))),
+          blockers: Math.min(4, Math.max(0, Math.round(counterDensity / 25))),
+          restedChars: Math.max(0, Math.round(stageCount / 2)),
+          triggerDeck: eventCount >= 8,
+          aggressiveMode: characterCount > eventCount + stageCount,
+          defensiveMode: counterDensity >= 35,
+          importedLeader: {
+            id: selectedLeader.id,
+            number: selectedLeader.number,
+            name: selectedLeader.name,
+            type: selectedLeader.type,
+            color: selectedLeader.color,
+          },
+          importedCards: selectedDeckCards.map((entry) => ({
+            id: entry.card.id,
+            number: entry.card.number,
+            name: entry.card.name,
+            type: entry.card.type,
+            color: entry.card.color,
+            cost: entry.card.cost,
+            power: String(entry.card.power || ""),
+            effect: entry.card.effect,
+          })),
+        }),
+      });
 
-  const [oppCharacters] = useState([
-    { id: 1, name: "Kaido", power: 8000, cost: 5, active: true, hasAbility: true },
-    { id: 2, name: "King", power: 6000, cost: 4, active: false, hasAbility: true },
-    { id: 3, name: "", power: 0, cost: 0, active: true, hasAbility: false },
-    { id: 4, name: "", power: 0, cost: 0, active: true, hasAbility: false },
-    { id: 5, name: "", power: 0, cost: 0, active: true, hasAbility: false },
-  ]);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.analysis) {
+        throw new Error(payload?.message || "AI deck analysis failed.");
+      }
 
-  // Three recommendation options
-  const recommendations = {
-    best: {
-      title: "Best Move",
-      plan: "Counter Drain → Two-Turn Checkmate",
-      winProbability: 78,
-      riskLevel: "Low",
-      cardAdvantage: "+2",
-      actions: [
-        "Attack leader with both active characters",
-        "Force opponent to counter or take 2 damage",
-        "If they counter, their hand drops to 0 cards",
-        "Next turn: Deploy big threat with no counter available"
-      ]
-    },
-    aggressive: {
-      title: "Aggressive Move",
-      plan: "All-In Leader Attack",
-      winProbability: 65,
-      riskLevel: "High",
-      cardAdvantage: "-1",
-      actions: [
-        "Attack leader with all available characters",
-        "Use all DON for power boosts",
-        "Aim for immediate lethal",
-        "Risk opponent's counter-swing next turn"
-      ]
-    },
-    safe: {
-      title: "Safe Move",
-      plan: "Board Control & Value",
-      winProbability: 55,
-      riskLevel: "Low",
-      cardAdvantage: "+1",
-      actions: [
-        "Remove opponent's strongest character",
-        "Develop blocker for defense",
-        "Keep DON for counter next turn",
-        "Maintain card advantage"
-      ]
+      setAnalysis(payload.analysis as CoachAnalysis);
+      setProviderInfo(`${payload?.provider || "ai"} • ${payload?.model || ""}`.trim());
+    } catch (fetchError) {
+      setAnalysis(null);
+      setAiError(fetchError instanceof Error ? fetchError.message : "AI deck analysis failed.");
+    } finally {
+      setIsAnalyzing(false);
     }
   };
 
-  // Probability data
-  const moveOutcomeData = [
-    { name: "Best Move", value: 78 },
-    { name: "Aggressive", value: 65 },
-    { name: "Safe", value: 55 }
-  ];
+  const handleSaveDeck = async () => {
+    if (!selectedLeader) return void setSaveStatus("Leader select karo before saving.");
+    if (totalCards === 0) return void setSaveStatus("Deck me cards add karo before saving.");
 
-  const COLORS = ['#fbbf24', '#ef4444', '#3b82f6'];
-
-  const decisionComparisonData = [
-    { move: 'Best', winRate: 78, damage: 4, risk: 2 },
-    { move: 'Aggressive', winRate: 65, damage: 7, risk: 8 },
-    { move: 'Safe', winRate: 55, damage: 2, risk: 1 }
-  ];
-
-  // Timeline data
-  const timelineData = [
-    {
-      turn: 1,
-      title: "Current Turn",
-      action: "Counter Drain Attack",
-      outcome: "Opponent hand → 0 cards",
-      winProb: 45
-    },
-    {
-      turn: 2,
-      title: "Next Turn",
-      action: "Deploy 8-cost Threat",
-      outcome: "No counter available",
-      winProb: 78
-    },
-    {
-      turn: 3,
-      title: "Turn After",
-      action: "Lethal Attack",
-      outcome: "Game won",
-      winProb: 95
+    try {
+      setSaveStatus("Deck save ho raha hai...");
+      const payload = {
+        deck_name: `${selectedLeader.name} AI Coach Deck`,
+        leader: {
+          card_code: selectedLeader.id,
+          name: selectedLeader.name,
+          color: selectedLeader.color,
+        },
+        deck_cards: selectedDeckCards.map((entry) => ({ card_code: entry.card.id, count: entry.count })),
+        tags: ["ai-coach", selectedLeader.color || "unknown"],
+        notes: "Built inside One-Piece-TCG-Learning-Guide AI Coach.",
+      };
+      const response = await fetch(withApiBase("/decks/save"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.message || `Failed to save deck (${response.status})`);
+      setSaveStatus(`Saved: ${data?.deck_name || payload.deck_name}`);
+    } catch (fetchError) {
+      setSaveStatus(fetchError instanceof Error ? fetchError.message : "Failed to save deck.");
     }
-  ];
+  };
+
+  const applyImportedDeck = (rawText: string) => {
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      parsed = null;
+    }
+
+    const deckEntries = Array.isArray(parsed?.deck_cards)
+      ? parsed.deck_cards
+      : String(rawText || "")
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => {
+            const strict = line.match(/^(\d+)\s*x\s*([A-Za-z]{1,5}\d{2}-\d{3}(?:[_-][A-Za-z0-9]+)?)$/i);
+            return strict ? { card_code: String(strict[2]).toUpperCase(), count: Number(strict[1] || 1) } : null;
+          })
+          .filter(Boolean);
+
+    if (!Array.isArray(deckEntries) || deckEntries.length === 0) {
+      setImportStatus("No valid deck cards found in selected file.");
+      return;
+    }
+
+    const nextDeck = new Map<string, number>();
+    let accepted = 0;
+    for (const rawEntry of deckEntries) {
+      const cardCode = String(rawEntry?.card_code || "").trim().toUpperCase();
+      const count = Math.max(1, Math.min(4, Number(rawEntry?.count || 1)));
+      const matched = allCards.find((card) => card.id.toUpperCase() === cardCode);
+      if (!matched || matched.type === "Leader") continue;
+      const existing = nextDeck.get(matched.id) || 0;
+      const allowed = Math.min(4 - existing, 50 - accepted, count);
+      if (allowed <= 0) continue;
+      nextDeck.set(matched.id, existing + allowed);
+      accepted += allowed;
+      if (accepted >= 50) break;
+    }
+
+    const leaderCode = String(parsed?.leader?.card_code || "").trim().toUpperCase();
+    const matchedLeader = leaderCode ? allCards.find((card) => card.id.toUpperCase() === leaderCode && card.type === "Leader") || null : null;
+
+    if (nextDeck.size === 0) {
+      setImportStatus("Imported deck ka koi card current pool me match nahi hua.");
+      return;
+    }
+
+    setDeckCards(nextDeck);
+    if (matchedLeader) setSelectedLeader(matchedLeader);
+    setImportStatus(`Deck imported: ${accepted} cards${matchedLeader ? ` + ${matchedLeader.name}` : ""}.`);
+  };
+
+  const onImportDeckFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      const rawText = await file.text();
+      applyImportedDeck(rawText);
+    } catch {
+      setImportStatus("Failed to read deck file.");
+    }
+  };
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <Brain className="w-8 h-8 text-pink-600" />
-          <h2 className="text-3xl font-bold text-gray-900">
-            🧠 AI Coach - Strategic Battle Assistant
-          </h2>
-        </div>
-        <p className="text-gray-900">
-          Your intelligent battlefield advisor - analyze game state and receive tournament-level strategic recommendations
-        </p>
-      </div>
-
-      {/* Card Import Section - Fetch from Card Action Intelligence */}
-      <Card className="p-6 transition-all bg-gradient-to-br from-teal-50 to-cyan-50 border-2 border-teal-300">
-        <div className="space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-teal-500">
-              <Layers className="w-5 h-5 text-white" />
+      <Card className="border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-pink-500 to-violet-500">
+                <Brain className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h2 className="text-3xl font-bold text-gray-900">Deck Lab</h2>
+                <p className="text-sm text-gray-700">Build your deck, review cards with images, run analytics, and analyze the same deck with AI.</p>
+              </div>
             </div>
-            <div className="flex-1">
-              <h3 className="text-xl font-bold text-teal-900">Deck Integration</h3>
-              <p className="text-sm text-teal-700">Import your selected cards from Card Action Intelligence</p>
-            </div>
-            <Button
-              onClick={handleFetchCards}
-              className="gap-2 bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-700 hover:to-cyan-700 text-white"
-            >
-              <Download className="w-4 h-4" />
-              Fetch Cards
-            </Button>
-            {importedCards.length > 0 && (
-              <Button
-                onClick={handleRefreshCards}
-                variant="outline"
-                className="gap-2 border-teal-300 hover:bg-teal-50"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Refresh
-              </Button>
-            )}
           </div>
-
-          {importedCards.length > 0 ? (
-            <div className="space-y-4">
-              {/* Imported Leader Display */}
-              {importedLeader && (
-                <div className="bg-white p-4 rounded-xl border-2 border-teal-300">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Crown className="w-5 h-5 text-yellow-600" />
-                    <p className="text-sm font-bold text-teal-900">IMPORTED LEADER</p>
-                  </div>
-                  <div className="flex gap-4">
-                    <div className="w-24 aspect-[3/4] bg-gradient-to-br from-yellow-400 to-orange-600 rounded-lg border-2 border-yellow-400 flex items-center justify-center shadow-lg">
-                      <div className="text-center text-white p-2">
-                        <p className="font-bold text-xs">{importedLeader.name}</p>
-                        <p className="text-xs mt-1">{importedLeader.number}</p>
-                      </div>
-                    </div>
-                    <div className="flex-1">
-                      <h4 className="font-bold text-gray-900">{importedLeader.name}</h4>
-                      <p className="text-xs text-gray-600 mb-2">{importedLeader.number}</p>
-                      <div className="flex gap-2 flex-wrap">
-                        <Badge className="bg-yellow-100 text-yellow-800 text-xs">
-                          {importedLeader.type}
-                        </Badge>
-                        <Badge className="bg-orange-100 text-orange-800 text-xs">
-                          {importedLeader.color}
-                        </Badge>
-                        <Badge className="bg-purple-100 text-purple-800 text-xs">
-                          {importedLeader.role}
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-gray-700 mt-2 line-clamp-2">{importedLeader.simpleMeaning}</p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Imported Cards Display */}
-              <div className="bg-white p-4 rounded-xl border-2 border-teal-300">
-                <div className="flex items-center gap-2 mb-3">
-                  <Layers className="w-5 h-5 text-teal-600" />
-                  <p className="text-sm font-bold text-teal-900">IMPORTED DECK CARDS ({importedCards.length})</p>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-                  {importedCards.map((card, index) => (
-                    <div
-                      key={index}
-                      className="relative p-3 rounded-lg border-2 border-teal-200 bg-teal-50 hover:border-teal-400 hover:shadow-md transition-all"
-                    >
-                      <div className="aspect-[3/4] bg-gradient-to-br from-blue-400 to-purple-600 rounded border-2 border-teal-300 flex items-center justify-center mb-2 relative">
-                        <div className="text-center text-white p-1">
-                          <p className="text-xs font-bold truncate">{card.name}</p>
-                          <p className="text-xs mt-1">{card.number}</p>
-                        </div>
-                        {card.keywords && card.keywords.length > 0 && (
-                          <div className="absolute top-1 right-1 bg-yellow-400 text-yellow-900 px-1 py-0.5 rounded text-xs font-bold">
-                            {card.keywords[0]}
-                          </div>
-                        )}
-                      </div>
-                      <p className="text-xs font-bold text-gray-900 truncate">{card.name}</p>
-                      <div className="flex items-center justify-between mt-1">
-                        <Badge className="text-xs bg-blue-100 text-blue-800 px-1 py-0">
-                          {card.type}
-                        </Badge>
-                        <Badge className="text-xs bg-purple-100 text-purple-800 px-1 py-0">
-                          {card.cost}
-                        </Badge>
-                      </div>
-                      {card.power && (
-                        <div className="mt-1">
-                          <Badge className="text-xs bg-red-100 text-red-800 px-1 py-0">
-                            {card.power}
-                          </Badge>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Deck Analysis Summary */}
-              <div className="bg-gradient-to-r from-teal-50 to-cyan-50 p-4 rounded-xl border-2 border-teal-300">
-                <p className="text-sm font-bold text-teal-900 mb-3">DECK ANALYSIS</p>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="bg-white p-3 rounded-lg border border-teal-200">
-                    <p className="text-xs text-gray-600 mb-1">Total Cards</p>
-                    <p className="text-2xl font-bold text-teal-900">{importedCards.length}</p>
-                  </div>
-                  <div className="bg-white p-3 rounded-lg border border-blue-200">
-                    <p className="text-xs text-gray-600 mb-1">Characters</p>
-                    <p className="text-2xl font-bold text-blue-900">
-                      {importedCards.filter(c => c.type === 'Character').length}
-                    </p>
-                  </div>
-                  <div className="bg-white p-3 rounded-lg border border-purple-200">
-                    <p className="text-xs text-gray-600 mb-1">Events</p>
-                    <p className="text-2xl font-bold text-purple-900">
-                      {importedCards.filter(c => c.type === 'Event').length}
-                    </p>
-                  </div>
-                  <div className="bg-white p-3 rounded-lg border border-yellow-200">
-                    <p className="text-xs text-gray-600 mb-1">Avg Cost</p>
-                    <p className="text-2xl font-bold text-yellow-900">
-                      {importedCards.length > 0 
-                        ? (importedCards.reduce((sum, c) => sum + c.cost, 0) / importedCards.length).toFixed(1)
-                        : '0'}
-                    </p>
-                  </div>
-                </div>
-                <div className="mt-3 p-3 bg-teal-100 rounded-lg border border-teal-300">
-                  <div className="flex items-start gap-2">
-                    <Target className="w-5 h-5 text-teal-600 mt-0.5 flex-shrink-0" />
-                    <div>
-                      <p className="font-semibold text-teal-900 mb-1 text-sm">AI Coach Integration Active</p>
-                      <p className="text-xs text-gray-700">
-                        The AI Coach will now analyze your imported deck cards along with the current game state to provide 
-                        personalized strategic recommendations based on your actual hand composition.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="bg-white p-6 rounded-xl border-2 border-teal-200 text-center">
-              <Layers className="w-16 h-16 text-teal-300 mx-auto mb-3" />
-              <p className="text-gray-700 mb-2">No cards imported yet</p>
-              <p className="text-sm text-gray-600">
-                Go to <span className="font-bold text-teal-700">Card Action Intelligence</span> section, select your 15 cards and leader, 
-                then click "Fetch Cards" button above to import them here.
-              </p>
-            </div>
-          )}
+          <div className="flex flex-wrap gap-2">
+            <input ref={importFileRef} type="file" accept=".json,.txt,.deck" className="hidden" onChange={(event) => void onImportDeckFile(event)} />
+            <Button variant="outline" onClick={() => importFileRef.current?.click()}><Download className="mr-2 h-4 w-4" />Import Deck</Button>
+            <Button variant="outline" onClick={handleSaveDeck}><Save className="mr-2 h-4 w-4" />Save Deck</Button>
+            <Button variant="outline" onClick={() => { setSelectedLeader(null); setDeckCards(new Map()); setAnalysis(null); setOptimizeAnalysis(null); setAiError(null); }}><X className="mr-2 h-4 w-4" />Reset</Button>
+          </div>
         </div>
+        {saveStatus ? <p className="mt-3 text-xs text-gray-600">{saveStatus}</p> : null}
+        {importStatus ? <p className="mt-1 text-xs text-gray-600">{importStatus}</p> : null}
       </Card>
 
-      <div className="grid lg:grid-cols-12 gap-6">
-        {/* SECTION 1 — Game State Input Panel */}
-        <Card className="lg:col-span-4 p-6 transition-all bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-300">
-          <div className="space-y-4">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-indigo-500">
-                <Target className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <h3 className="text-xl font-bold text-indigo-900">Game State Input</h3>
-                <p className="text-sm text-indigo-700">Enter current battlefield information</p>
+      <div className="grid gap-6 lg:grid-cols-12">
+        <Card className="border-2 border-cyan-200 bg-gradient-to-br from-cyan-50 to-white p-6 lg:col-span-4">
+          <div className="space-y-5">
+            <div>
+              <h3 className="text-xl font-bold text-cyan-950">Builder Controls</h3>
+              <p className="text-sm text-cyan-700">Search, filter, pick a leader, and run analysis.</p>
+            </div>
+
+            <div className="rounded-xl border border-cyan-200 bg-white p-4">
+              <label className="mb-2 block text-xs font-bold text-cyan-900">Search Cards</label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Name or code..." className="w-full rounded-lg border border-cyan-200 px-10 py-2" />
               </div>
             </div>
 
-            <div className="space-y-4">
-              {/* Leader Selection */}
-              <div className="bg-white p-4 rounded-lg border border-indigo-200">
-                <label className="text-xs font-bold text-indigo-900 mb-2 flex items-center gap-2">
-                  <Crown className="w-4 h-4" />
-                  LEADER SELECTION
-                </label>
-                <Select value={selectedLeader} onValueChange={setSelectedLeader}>
-                  <SelectTrigger className="w-full border-indigo-300 focus:ring-indigo-500">
-                    <SelectValue placeholder="Select your leader..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {leaders.map((leader) => (
-                      <SelectItem key={leader} value={leader}>
-                        {leader}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <FilterSelect label="Color" value={colorFilter} setValue={setColorFilter} options={COLOR_OPTIONS} />
+            <FilterSelect label="Type" value={typeFilter} setValue={setTypeFilter} options={TYPE_OPTIONS} />
 
-              {/* Turn Number */}
-              <div className="bg-white p-4 rounded-lg border border-indigo-200">
-                <label className="text-xs font-bold text-indigo-900 mb-2 flex items-center gap-2">
-                  <Activity className="w-4 h-4" />
-                  TURN NUMBER
-                </label>
-                <input
-                  type="number"
-                  value={turnNumber}
-                  onChange={(e) => setTurnNumber(e.target.value)}
-                  className="w-full px-3 py-2 border border-indigo-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                  min="1"
-                />
-              </div>
-
-              {/* Life */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-white p-4 rounded-lg border border-indigo-200">
-                  <label className="text-xs font-bold text-blue-900 mb-2 flex items-center gap-1">
-                    <Heart className="w-3 h-3" />
-                    YOUR LIFE
-                  </label>
-                  <input
-                    type="number"
-                    value={yourLife}
-                    onChange={(e) => setYourLife(e.target.value)}
-                    className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                    min="0"
-                    max="5"
-                  />
-                </div>
-                <div className="bg-white p-4 rounded-lg border border-indigo-200">
-                  <label className="text-xs font-bold text-red-900 mb-2 flex items-center gap-1">
-                    <Heart className="w-3 h-3" />
-                    OPP LIFE
-                  </label>
-                  <input
-                    type="number"
-                    value={oppLife}
-                    onChange={(e) => setOppLife(e.target.value)}
-                    className="w-full px-3 py-2 border border-red-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 bg-white"
-                    min="0"
-                    max="5"
-                  />
-                </div>
-              </div>
-
-              {/* Hand */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="bg-white p-4 rounded-lg border border-indigo-200">
-                  <label className="text-xs font-bold text-blue-900 mb-2 flex items-center gap-1">
-                    <Users className="w-3 h-3" />
-                    YOUR HAND
-                  </label>
-                  <input
-                    type="number"
-                    value={yourHand}
-                    onChange={(e) => setYourHand(e.target.value)}
-                    className="w-full px-3 py-2 border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                    min="0"
-                  />
-                </div>
-                <div className="bg-white p-4 rounded-lg border border-indigo-200">
-                  <label className="text-xs font-bold text-red-900 mb-2 flex items-center gap-1">
-                    <Users className="w-3 h-3" />
-                    OPP HAND
-                  </label>
-                  <input
-                    type="number"
-                    value={oppHand}
-                    onChange={(e) => setOppHand(e.target.value)}
-                    className="w-full px-3 py-2 border border-red-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500 bg-white"
-                    min="0"
-                  />
-                </div>
-              </div>
-
-              {/* DON */}
-              <div className="bg-white p-4 rounded-lg border border-indigo-200">
-                <label className="text-xs font-bold text-indigo-900 mb-2 flex items-center gap-2">
-                  <Zap className="w-4 h-4" />
-                  DON AVAILABLE
-                </label>
-                <input
-                  type="number"
-                  value={donAvailable}
-                  onChange={(e) => setDonAvailable(e.target.value)}
-                  className="w-full px-3 py-2 border border-indigo-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                  min="0"
-                />
-              </div>
-
-              {/* Board State */}
-              <div className="bg-white p-4 rounded-lg border border-indigo-200">
-                <p className="text-xs font-bold text-indigo-900 mb-3">BATTLEFIELD STATE</p>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="text-xs font-bold text-gray-700 mb-1 flex items-center gap-1">
-                      <Sword className="w-3 h-3" />
-                      ATTACKERS
-                    </label>
-                    <input
-                      type="number"
-                      value={attackers}
-                      onChange={(e) => setAttackers(e.target.value)}
-                      className="w-full px-2 py-1.5 border border-indigo-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                      min="0"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-700 mb-1 flex items-center gap-1">
-                      <Shield className="w-3 h-3" />
-                      BLOCKERS
-                    </label>
-                    <input
-                      type="number"
-                      value={blockers}
-                      onChange={(e) => setBlockers(e.target.value)}
-                      className="w-full px-2 py-1.5 border border-indigo-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                      min="0"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-700 mb-1 flex items-center gap-1">
-                      <Activity className="w-3 h-3" />
-                      RESTED
-                    </label>
-                    <input
-                      type="number"
-                      value={restedChars}
-                      onChange={(e) => setRestedChars(e.target.value)}
-                      className="w-full px-2 py-1.5 border border-indigo-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                      min="0"
-                    />
+            <div className="rounded-xl border border-indigo-200 bg-white p-4">
+              <div className="mb-2 flex items-center gap-2"><Crown className="h-4 w-4 text-indigo-600" /><p className="text-xs font-bold text-indigo-900">Leader</p></div>
+              {selectedLeader ? (
+                <div className="space-y-2">
+                  <p className="font-semibold text-gray-900">{selectedLeader.name}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Badge className="bg-indigo-100 text-indigo-800">{selectedLeader.number}</Badge>
+                    <Badge className="bg-slate-100 text-slate-800">{selectedLeader.color || "Unknown"}</Badge>
                   </div>
                 </div>
-              </div>
-
-              {/* Strategy Toggles */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between p-3 rounded-lg border-2 border-yellow-300 bg-yellow-50 hover:shadow-md transition-shadow">
-                  <div>
-                    <p className="font-semibold text-yellow-900 text-sm">
-                      ⚡ Trigger-Focused Deck
-                    </p>
-                    <p className="text-xs text-yellow-700">
-                      Yellow/Green trigger synergies
-                    </p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={triggerDeck}
-                      onChange={(e) => setTriggerDeck(e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-yellow-500"></div>
-                  </label>
-                </div>
-
-                <div className="flex items-center justify-between p-3 rounded-lg border-2 border-red-300 bg-red-50 hover:shadow-md transition-shadow">
-                  <div>
-                    <p className="font-semibold text-red-900 text-sm">
-                      ⚔️ Aggressive Strategy
-                    </p>
-                    <p className="text-xs text-red-700">
-                      Prioritize damage and pressure
-                    </p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={aggressiveMode}
-                      onChange={(e) => setAggressiveMode(e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
-                  </label>
-                </div>
-
-                <div className="flex items-center justify-between p-3 rounded-lg border-2 border-blue-300 bg-blue-50 hover:shadow-md transition-shadow">
-                  <div>
-                    <p className="font-semibold text-blue-900 text-sm">
-                      🛡️ Defensive Mode
-                    </p>
-                    <p className="text-xs text-blue-700">
-                      Focus on board control
-                    </p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={defensiveMode}
-                      onChange={(e) => setDefensiveMode(e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
-                  </label>
-                </div>
-              </div>
-
-              {/* Analyze Button */}
-              <Button
-                onClick={handleAnalyze}
-                className="w-full gap-2 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white py-6 text-lg font-bold shadow-lg hover:shadow-xl transition-all"
-                disabled={isAnalyzing}
-              >
-                {isAnalyzing ? (
-                  <>
-                    <Compass className="w-5 h-5 animate-spin" />
-                    Analyzing Battlefield...
-                  </>
-                ) : (
-                  <>
-                    <Brain className="w-5 h-5" />
-                    Analyze & Get Recommendation
-                  </>
-                )}
-              </Button>
+              ) : (
+                <p className="text-sm text-gray-500">Select a leader card from the grid.</p>
+              )}
             </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <MetricTile label="Deck Size" value={`${totalCards}/50`} tone="pink" />
+              <MetricTile label="Unique" value={String(uniqueCards)} tone="violet" />
+              <MetricTile label="Avg Cost" value={averageCost.toFixed(1)} tone="cyan" />
+              <MetricTile label="Counter %" value={`${counterDensity}%`} tone="emerald" />
+            </div>
+
+            <Button variant="outline" className="w-full" onClick={handleRunAnalytics} disabled={optimizing}>
+              {optimizing ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <BarChart3 className="mr-2 h-4 w-4" />}
+              Run Deck Analytics
+            </Button>
+            <Button className="w-full bg-gradient-to-r from-pink-600 to-violet-600 text-white hover:from-pink-700 hover:to-violet-700" onClick={handleAnalyze} disabled={isAnalyzing}>
+              {isAnalyzing ? <LoaderCircle className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />}
+              Analyze Deck With AI
+            </Button>
+
+            {optimizeStatus ? <p className="text-xs text-gray-600">{optimizeStatus}</p> : null}
+            {aiError ? <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">{aiError}</div> : null}
           </div>
         </Card>
 
-        {/* SECTION 2 — AI Strategy Engine */}
-        <Card className="lg:col-span-8 p-6 transition-all bg-gradient-to-br from-pink-50 to-purple-50 border-2 border-pink-300">
-          <div className="space-y-4">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-pink-500">
-                <Brain className="w-5 h-5 text-white" />
-              </div>
+        <div className="space-y-6 lg:col-span-8">
+          <Card className="border-2 border-slate-200 bg-white p-6">
+            <div className="mb-4 flex items-center justify-between gap-4">
               <div>
-                <h3 className="text-xl font-bold text-pink-900">AI Strategy Engine</h3>
-                <p className="text-sm text-pink-700">Three strategic recommendations with win probability</p>
+                <h3 className="text-xl font-bold text-slate-950">Available Cards</h3>
+                <p className="text-sm text-slate-600">{loadingCards ? "Loading cards..." : `${filteredCards.length} cards found`}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge className="bg-slate-100 text-slate-700">Color: {colorFilter}</Badge>
+                <Badge className="bg-slate-100 text-slate-700">Type: {typeFilter}</Badge>
               </div>
             </div>
 
-            {!showRecommendation ? (
-              <div className="flex flex-col items-center justify-center h-96 text-center bg-white rounded-lg border-2 border-pink-200">
-                <Compass className="w-20 h-20 text-pink-300 mb-4" />
-                <p className="text-gray-700 text-lg">
-                  Enter game state and click "Analyze" to receive strategic recommendations
-                </p>
-              </div>
+            {loadingError ? <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{loadingError}</div> : null}
+
+            {!loadingCards && filteredCards.length === 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center text-sm text-gray-500">Selected filters ke liye koi card nahi mila.</div>
             ) : (
-              <div className="space-y-6">
-                {/* Three Recommendation Cards */}
-                <div className="grid md:grid-cols-3 gap-4">
-                  {/* Best Move - Gold/Yellow */}
-                  <div className="relative p-5 rounded-xl border-2 border-yellow-300 bg-gradient-to-br from-yellow-50 to-amber-50 shadow-lg hover:shadow-xl transition-all group">
-                    <div className="absolute -top-3 -right-3 bg-yellow-500 text-white px-3 py-1 rounded-full text-xs font-bold shadow-md">
-                      RECOMMENDED
-                    </div>
-                    <div className="flex items-center gap-2 mb-3">
-                      <Target className="w-5 h-5 text-yellow-600" />
-                      <h4 className="font-bold text-yellow-900">{recommendations.best.title}</h4>
-                    </div>
-                    <p className="text-sm font-semibold text-gray-900 mb-3">
-                      {recommendations.best.plan}
-                    </p>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-gray-600">Win Probability</span>
-                        <span className="text-lg font-bold text-green-600">
-                          {recommendations.best.winProbability}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div 
-                          className="bg-gradient-to-r from-green-400 to-green-600 h-2 rounded-full transition-all"
-                          style={{ width: `${recommendations.best.winProbability}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between pt-2">
-                        <Badge className="bg-green-100 text-green-800 text-xs">
-                          {recommendations.best.riskLevel} Risk
-                        </Badge>
-                        <Badge className="bg-blue-100 text-blue-800 text-xs">
-                          {recommendations.best.cardAdvantage} Cards
-                        </Badge>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Aggressive Move - Red */}
-                  <div className="relative p-5 rounded-xl border-2 border-red-300 bg-gradient-to-br from-red-50 to-orange-50 shadow-lg hover:shadow-xl transition-all group">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Sword className="w-5 h-5 text-red-600" />
-                      <h4 className="font-bold text-red-900">{recommendations.aggressive.title}</h4>
-                    </div>
-                    <p className="text-sm font-semibold text-gray-900 mb-3">
-                      {recommendations.aggressive.plan}
-                    </p>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-gray-600">Win Probability</span>
-                        <span className="text-lg font-bold text-orange-600">
-                          {recommendations.aggressive.winProbability}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div 
-                          className="bg-gradient-to-r from-orange-400 to-red-600 h-2 rounded-full transition-all"
-                          style={{ width: `${recommendations.aggressive.winProbability}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between pt-2">
-                        <Badge className="bg-red-100 text-red-800 text-xs">
-                          {recommendations.aggressive.riskLevel} Risk
-                        </Badge>
-                        <Badge className="bg-blue-100 text-blue-800 text-xs">
-                          {recommendations.aggressive.cardAdvantage} Cards
-                        </Badge>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Safe Move - Blue */}
-                  <div className="relative p-5 rounded-xl border-2 border-blue-300 bg-gradient-to-br from-blue-50 to-cyan-50 shadow-lg hover:shadow-xl transition-all group">
-                    <div className="flex items-center gap-2 mb-3">
-                      <Shield className="w-5 h-5 text-blue-600" />
-                      <h4 className="font-bold text-blue-900">{recommendations.safe.title}</h4>
-                    </div>
-                    <p className="text-sm font-semibold text-gray-900 mb-3">
-                      {recommendations.safe.plan}
-                    </p>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs text-gray-600">Win Probability</span>
-                        <span className="text-lg font-bold text-blue-600">
-                          {recommendations.safe.winProbability}%
-                        </span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div 
-                          className="bg-gradient-to-r from-blue-400 to-blue-600 h-2 rounded-full transition-all"
-                          style={{ width: `${recommendations.safe.winProbability}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center justify-between pt-2">
-                        <Badge className="bg-green-100 text-green-800 text-xs">
-                          {recommendations.safe.riskLevel} Risk
-                        </Badge>
-                        <Badge className="bg-blue-100 text-blue-800 text-xs">
-                          {recommendations.safe.cardAdvantage} Cards
-                        </Badge>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Action Flow with Arrows */}
-                <div className="bg-white p-5 rounded-xl border-2 border-pink-200">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Lightbulb className="w-5 h-5 text-pink-600" />
-                    <p className="text-sm font-bold text-pink-900">TURN ACTION FLOW</p>
-                  </div>
-                  <div className="space-y-3">
-                    {recommendations.best.actions.map((action, index) => (
-                      <div key={index}>
-                        <div className="flex items-start gap-3 bg-pink-50 p-3 rounded-lg border border-pink-200 hover:shadow-md transition-shadow">
-                          <div className="flex items-center justify-center w-7 h-7 rounded-full bg-gradient-to-br from-pink-500 to-purple-500 text-white text-sm font-bold shrink-0">
-                            {index + 1}
-                          </div>
-                          <p className="text-sm text-gray-900 font-medium">{action}</p>
-                        </div>
-                        {index < recommendations.best.actions.length - 1 && (
-                          <div className="flex justify-center py-1">
-                            <ChevronRight className="w-5 h-5 text-pink-400 transform rotate-90" />
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+              <div className="grid max-h-[70vh] grid-cols-1 gap-3 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
+                {visibleCards.map((card) => (
+                  <CardEntry key={card.id} card={card} count={deckCards.get(card.id) || 0} onAdd={addCard} onRemove={removeCard} />
+                ))}
               </div>
             )}
-          </div>
-        </Card>
-      </div>
 
-      {showRecommendation && (
-        <>
-          {/* SECTION 3 — Battlefield Simulator */}
-          <Card className="p-6 transition-all bg-gradient-to-br from-red-50 to-orange-50 border-2 border-red-300">
-            <div className="space-y-4">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-red-500">
-                  <Sword className="w-5 h-5 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-xl font-bold text-red-900">Battlefield Simulator</h3>
-                  <p className="text-sm text-red-700">Visual representation of current board state</p>
-                </div>
+            {!loadingCards && filteredCards.length > visibleCards.length ? (
+              <div className="mt-4 flex justify-center">
+                <Button variant="outline" onClick={() => setVisibleCount((prev) => prev + 60)}>Load More Cards</Button>
               </div>
-
-              <div className="space-y-6">
-                {/* Opponent Side */}
-                <div className="bg-white p-4 rounded-xl border-2 border-red-300">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Users className="w-5 h-5 text-red-600" />
-                    <p className="font-bold text-red-900">OPPONENT</p>
-                    <Badge className="bg-red-500 text-white ml-auto">
-                      Life: {oppLife}
-                    </Badge>
-                  </div>
-                  
-                  {/* Opponent Leader */}
-                  <div className="mb-4">
-                    <div className="bg-red-50 p-3 rounded-lg border-2 border-red-300 inline-block">
-                      <div className="flex items-center gap-3">
-                        <Crown className="w-6 h-6 text-red-600" />
-                        <div>
-                          <p className="text-xs font-bold text-gray-700">OPPONENT LEADER</p>
-                          <p className="font-bold text-gray-900">Power: 5000</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Opponent Characters */}
-                  <div className="grid grid-cols-5 gap-3">
-                    {oppCharacters.map((char) => (
-                      <div
-                        key={char.id}
-                        className={`relative p-3 rounded-lg border-2 ${
-                          char.name
-                            ? char.active
-                              ? 'border-red-300 bg-red-50 shadow-md hover:shadow-lg'
-                              : 'border-gray-400 bg-gray-100 opacity-60 transform rotate-90'
-                            : 'border-dashed border-gray-300 bg-gray-50'
-                        } transition-all`}
-                      >
-                        {char.name ? (
-                          <>
-                            {char.hasAbility && (
-                              <div className="absolute -top-2 -right-2 bg-yellow-500 text-white px-2 py-0.5 rounded-full text-xs font-bold">
-                                ⚡
-                              </div>
-                            )}
-                            <div className="aspect-square bg-gradient-to-br from-red-400 to-red-600 rounded-md mb-2 flex items-center justify-center">
-                              <Users className="w-6 h-6 text-white" />
-                            </div>
-                            <p className="text-xs font-bold text-gray-900 truncate">{char.name}</p>
-                            <div className="flex items-center justify-between mt-1">
-                              <Badge className="bg-red-100 text-red-800 text-xs px-1 py-0">
-                                {char.power}
-                              </Badge>
-                              <Badge className="bg-yellow-100 text-yellow-800 text-xs px-1 py-0">
-                                {char.cost}
-                              </Badge>
-                            </div>
-                            {!char.active && (
-                              <p className="text-xs text-gray-600 mt-1">RESTED</p>
-                            )}
-                          </>
-                        ) : (
-                          <div className="aspect-square flex items-center justify-center text-gray-400">
-                            <p className="text-xs">Empty</p>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Battle Line */}
-                <div className="flex items-center gap-3 justify-center">
-                  <div className="flex-1 h-1 bg-gradient-to-r from-blue-400 to-red-400"></div>
-                  <Sword className="w-6 h-6 text-orange-500" />
-                  <div className="flex-1 h-1 bg-gradient-to-r from-red-400 to-blue-400"></div>
-                </div>
-
-                {/* Your Side */}
-                <div className="bg-white p-4 rounded-xl border-2 border-blue-300">
-                  <div className="flex items-center gap-2 mb-4">
-                    <Users className="w-5 h-5 text-blue-600" />
-                    <p className="font-bold text-blue-900">YOUR SIDE</p>
-                    <Badge className="bg-blue-500 text-white ml-auto">
-                      Life: {yourLife}
-                    </Badge>
-                  </div>
-
-                  {/* Your Characters */}
-                  <div className="grid grid-cols-5 gap-3 mb-4">
-                    {yourCharacters.map((char) => (
-                      <div
-                        key={char.id}
-                        className={`relative p-3 rounded-lg border-2 ${
-                          char.name
-                            ? char.active
-                              ? 'border-blue-300 bg-blue-50 shadow-md hover:shadow-lg'
-                              : 'border-gray-400 bg-gray-100 opacity-60 transform rotate-90'
-                            : 'border-dashed border-gray-300 bg-gray-50'
-                        } transition-all cursor-pointer hover:border-blue-500`}
-                      >
-                        {char.name ? (
-                          <>
-                            {char.hasAbility && (
-                              <div className="absolute -top-2 -right-2 bg-yellow-500 text-white px-2 py-0.5 rounded-full text-xs font-bold">
-                                ⚡
-                              </div>
-                            )}
-                            <div className="aspect-square bg-gradient-to-br from-blue-400 to-blue-600 rounded-md mb-2 flex items-center justify-center">
-                              <Users className="w-6 h-6 text-white" />
-                            </div>
-                            <p className="text-xs font-bold text-gray-900 truncate">{char.name}</p>
-                            <div className="flex items-center justify-between mt-1">
-                              <Badge className="bg-blue-100 text-blue-800 text-xs px-1 py-0">
-                                {char.power}
-                              </Badge>
-                              <Badge className="bg-yellow-100 text-yellow-800 text-xs px-1 py-0">
-                                {char.cost}
-                              </Badge>
-                            </div>
-                            {!char.active && (
-                              <p className="text-xs text-gray-600 mt-1">RESTED</p>
-                            )}
-                          </>
-                        ) : (
-                          <div className="aspect-square flex items-center justify-center text-gray-400">
-                            <p className="text-xs">Empty</p>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Your Leader */}
-                  <div>
-                    <div className="bg-blue-50 p-3 rounded-lg border-2 border-blue-300 inline-block">
-                      <div className="flex items-center gap-3">
-                        <Crown className="w-6 h-6 text-blue-600" />
-                        <div>
-                          <p className="text-xs font-bold text-gray-700">YOUR LEADER</p>
-                          <p className="font-bold text-gray-900">
-                            {selectedLeader || "Power: 5000"}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            ) : null}
           </Card>
 
-          {/* SECTION 4 — Probability Engine & SECTION 5 — Strategy Insights */}
-          <div className="grid lg:grid-cols-2 gap-6">
-            {/* Probability Engine */}
-            <Card className="p-6 transition-all bg-gradient-to-br from-blue-50 to-cyan-50 border-2 border-blue-300">
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-500">
-                    <BarChart3 className="w-5 h-5 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-blue-900">Probability Engine</h3>
-                    <p className="text-sm text-blue-700">Data-driven decision analysis</p>
-                  </div>
+          <Card className="border-2 border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-6">
+            <Tabs defaultValue="list" className="w-full">
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="list">Deck List</TabsTrigger>
+                <TabsTrigger value="curve">Curve</TabsTrigger>
+                <TabsTrigger value="analytics">Analytics</TabsTrigger>
+                <TabsTrigger value="ai">AI Output</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="list" className="mt-5 space-y-4">
+                <div className="rounded-xl border border-emerald-200 bg-white p-4">
+                  <p className="text-sm font-bold text-emerald-900">Built Deck</p>
+                  <p className="text-xs text-emerald-700">Yahi deck analytics aur AI payload me jayega.</p>
                 </div>
+                {selectedDeckCards.length === 0 ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center text-sm text-gray-500">Abhi deck empty hai. Cards add karna start karo.</div>
+                ) : (
+                  <div className="space-y-2">
+                    {selectedDeckCards
+                      .sort((a, b) => b.count - a.count || a.card.cost - b.card.cost || a.card.name.localeCompare(b.card.name))
+                      .map((entry) => (
+                        <div key={entry.card.id} className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-white p-3">
+                          <div className="h-16 w-12 overflow-hidden rounded-md border border-emerald-200 bg-slate-100 shrink-0">
+                            {entry.card.imageUrl ? (
+                              <img src={entry.card.imageUrl} alt={entry.card.name} className="h-full w-full object-cover" loading="lazy" />
+                            ) : null}
+                          </div>
+                          <span className="w-10 rounded-full bg-emerald-100 px-2 py-1 text-center text-sm font-bold text-emerald-800">{entry.count}x</span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-medium text-gray-900">{entry.card.name}</p>
+                            <p className="text-xs text-gray-500">{entry.card.number} • {entry.card.type} • Cost {entry.card.cost}</p>
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" variant="outline" onClick={() => removeCard(entry.card)}>-1</Button>
+                            <Button size="sm" variant="outline" onClick={() => addCard(entry.card)}>+1</Button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </TabsContent>
 
-                <div className="space-y-6">
-                  {/* Win Probability Graph */}
-                  <div className="bg-white p-4 rounded-lg border border-blue-200">
-                    <p className="text-sm font-bold text-blue-900 mb-3">WIN PROBABILITY</p>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <BarChart data={decisionComparisonData}>
+              <TabsContent value="curve" className="mt-5">
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <Card className="border border-emerald-200 p-4">
+                    <p className="mb-2 text-sm font-bold text-emerald-900">Cost Curve</p>
+                    <ResponsiveContainer width="100%" height={240}>
+                      <BarChart data={curveData}>
                         <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="move" />
+                        <XAxis dataKey="cost" />
                         <YAxis />
                         <Tooltip />
-                        <Bar dataKey="winRate" fill="#fbbf24" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-
-                  {/* Decision Comparison Chart */}
-                  <div className="bg-white p-4 rounded-lg border border-blue-200">
-                    <p className="text-sm font-bold text-blue-900 mb-3">DECISION COMPARISON</p>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <BarChart data={decisionComparisonData}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="move" />
-                        <YAxis />
-                        <Tooltip />
-                        <Legend />
-                        <Bar dataKey="damage" fill="#ef4444" name="Damage" />
-                        <Bar dataKey="risk" fill="#3b82f6" name="Risk" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-
-                  {/* Move Outcome Distribution */}
-                  <div className="bg-white p-4 rounded-lg border border-blue-200">
-                    <p className="text-sm font-bold text-blue-900 mb-3">MOVE OUTCOME DISTRIBUTION</p>
-                    <ResponsiveContainer width="100%" height={200}>
-                      <PieChart>
-                        <Pie
-                          data={moveOutcomeData}
-                          cx="50%"
-                          cy="50%"
-                          labelLine={false}
-                          label={({ name, value }) => `${name}: ${value}%`}
-                          outerRadius={80}
-                          fill="#8884d8"
-                          dataKey="value"
-                        >
-                          {moveOutcomeData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                          {curveData.map((entry, index) => (
+                            <Cell key={`${entry.cost}-${index}`} fill={COLORS[index % COLORS.length]} />
                           ))}
-                        </Pie>
-                        <Tooltip />
-                      </PieChart>
+                        </Bar>
+                      </BarChart>
                     </ResponsiveContainer>
-                  </div>
+                  </Card>
+                  <Card className="border border-emerald-200 p-4">
+                    <p className="mb-3 text-sm font-bold text-emerald-900">Role Balance</p>
+                    <div className="grid grid-cols-3 gap-3">
+                      <MetricTile label="Chars" value={String(characterCount)} tone="emerald" />
+                      <MetricTile label="Events" value={String(eventCount)} tone="pink" />
+                      <MetricTile label="Stages" value={String(stageCount)} tone="violet" />
+                    </div>
+                  </Card>
                 </div>
-              </div>
-            </Card>
+              </TabsContent>
 
-            {/* Strategy Insights Panel */}
-            <Card className="p-6 transition-all bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-300">
-              <div className="space-y-4">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-green-500">
-                    <Lightbulb className="w-5 h-5 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-green-900">Strategy Insights</h3>
-                    <p className="text-sm text-green-700">AI-generated tactical analysis</p>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  {/* Board Advantage */}
-                  <div className="bg-white p-4 rounded-xl border-2 border-green-300">
-                    <div className="flex items-center gap-2 mb-2">
-                      <TrendingUp className="w-5 h-5 text-green-600" />
-                      <p className="text-sm font-bold text-green-900">BOARD ADVANTAGE</p>
+              <TabsContent value="analytics" className="mt-5 space-y-4">
+                {!optimizeAnalysis ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center text-sm text-gray-500">Run Deck Analytics to see optimizer results and suggested changes.</div>
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                      <MetricTile label="Power" value={optimizeAnalysis.deck_power ? String(optimizeAnalysis.deck_power.score) : "-"} tone="emerald" />
+                      <MetricTile label="Tier" value={optimizeAnalysis.deck_power?.tier || "-"} tone="violet" />
+                      <MetricTile label="Consistency" value={optimizeAnalysis.consistencyScore?.score ? String(optimizeAnalysis.consistencyScore.score) : "-"} tone="cyan" />
+                      <MetricTile label="Meta Fit" value={optimizeAnalysis.metaFitScore?.score ? String(optimizeAnalysis.metaFitScore.score) : "-"} tone="pink" />
+                      <MetricTile label="Win %" value={`${analyticsWinRate}%`} tone="emerald" />
+                      <MetricTile label="Best Pilot" value={pilotProfile.title} tone="violet" />
                     </div>
-                    <p className="text-gray-700 text-sm mb-2">
-                      You have <span className="font-bold text-green-600">+1 character advantage</span> on the field
-                    </p>
-                    <ul className="space-y-1 text-xs text-gray-600">
-                      <li>• Your active characters: 2</li>
-                      <li>• Opponent active characters: 1</li>
-                      <li>• Blockers available: {blockers}</li>
-                    </ul>
-                  </div>
 
-                  {/* Card Advantage */}
-                  <div className="bg-white p-4 rounded-xl border-2 border-blue-300">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Users className="w-5 h-5 text-blue-600" />
-                      <p className="text-sm font-bold text-blue-900">CARD ADVANTAGE</p>
+                    <Card className="border border-emerald-200 p-4">
+                      <p className="mb-3 text-sm font-bold text-emerald-900">Analytics Snapshot Chart</p>
+                      <ResponsiveContainer width="100%" height={230}>
+                        <BarChart data={analyticsChartData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" />
+                          <YAxis domain={[0, 100]} />
+                          <Tooltip />
+                          <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                            {analyticsChartData.map((entry, index) => (
+                              <Cell key={`${entry.name}-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </Card>
+
+                    <div className="rounded-xl border border-violet-200 bg-violet-50 p-4">
+                      <p className="text-sm font-bold text-violet-950">Best Suited Player</p>
+                      <p className="mt-2 text-sm text-violet-900">{pilotProfile.note}</p>
                     </div>
-                    <p className="text-gray-700 text-sm mb-2">
-                      You have <span className="font-bold text-blue-600">+{parseInt(yourHand) - parseInt(oppHand)} card advantage</span> in hand
-                    </p>
-                    <ul className="space-y-1 text-xs text-gray-600">
-                      <li>• Your hand: {yourHand} cards</li>
-                      <li>• Opponent hand: {oppHand} cards</li>
-                      <li>• Recommended: Keep pressure to deny draws</li>
-                    </ul>
-                  </div>
 
-                  {/* Risk Warnings */}
-                  <div className="bg-white p-4 rounded-xl border-2 border-red-300">
-                    <div className="flex items-center gap-2 mb-2">
-                      <AlertCircle className="w-5 h-5 text-red-600" />
-                      <p className="text-sm font-bold text-red-900">RISK WARNINGS</p>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-start gap-2">
-                        <span className="text-red-600 text-sm">⚠</span>
-                        <p className="text-sm text-gray-700">
-                          Opponent at {oppLife} life - potential comeback with trigger effects
-                        </p>
-                      </div>
-                      <div className="flex items-start gap-2">
-                        <span className="text-red-600 text-sm">⚠</span>
-                        <p className="text-sm text-gray-700">
-                          Watch for hidden blocker abilities
-                        </p>
-                      </div>
-                      <div className="flex items-start gap-2">
-                        <span className="text-yellow-600 text-sm">⚡</span>
-                        <p className="text-sm text-gray-700">
-                          Save 1-2 DON for defensive options
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Resource Analysis */}
-                  <div className="bg-white p-4 rounded-xl border-2 border-yellow-300">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Zap className="w-5 h-5 text-yellow-600" />
-                      <p className="text-sm font-bold text-yellow-900">RESOURCE ANALYSIS</p>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700">DON Available:</span>
-                        <span className="font-bold text-yellow-600">{donAvailable}</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700">Turn:</span>
-                        <span className="font-bold text-yellow-600">{turnNumber}</span>
-                      </div>
-                      <p className="text-xs text-gray-600 mt-2">
-                        Efficient DON usage is critical - prioritize high-impact plays
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </Card>
-          </div>
-
-          {/* SECTION 6 — Turn Simulation Timeline */}
-          <Card className="p-6 transition-all bg-gradient-to-br from-purple-50 to-violet-50 border-2 border-purple-300">
-            <div className="space-y-4">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-purple-500">
-                  <Activity className="w-5 h-5 text-white" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-xl font-bold text-purple-900">Turn Simulation Timeline</h3>
-                  <p className="text-sm text-purple-700">Predictive analysis for next 3 turns</p>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                {/* Timeline with connected nodes */}
-                <div className="relative">
-                  {/* Connection Line */}
-                  <div className="absolute top-12 left-0 right-0 h-1 bg-gradient-to-r from-blue-400 via-yellow-400 to-green-500 hidden md:block"></div>
-
-                  {/* Timeline Nodes */}
-                  <div className="grid md:grid-cols-3 gap-6 relative">
-                    {timelineData.map((turn, index) => (
-                      <div key={index} className="relative">
-                        {/* Turn Circle */}
-                        <div className="flex flex-col items-center mb-3">
-                          <div className={`w-24 h-24 rounded-full flex items-center justify-center border-4 ${
-                            index === 0 ? 'bg-gradient-to-br from-blue-400 to-blue-600 border-blue-500' :
-                            index === 1 ? 'bg-gradient-to-br from-yellow-400 to-yellow-600 border-yellow-500' :
-                            'bg-gradient-to-br from-green-500 to-green-700 border-green-500'
-                          } shadow-lg relative z-10`}>
-                            <div className="text-center">
-                              <p className="text-white text-xs font-bold">Turn {parseInt(turnNumber) + index}</p>
-                              <p className="text-white text-2xl font-bold">{turn.winProb}%</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Turn Details Card */}
-                        <div className={`bg-white p-4 rounded-xl border-2 ${
-                          index === 0 ? 'border-blue-300' :
-                          index === 1 ? 'border-yellow-300' :
-                          'border-green-300'
-                        }`}>
-                          <h4 className="font-bold text-gray-900 mb-2">{turn.title}</h4>
-                          <div className="space-y-2">
-                            <div>
-                              <p className="text-xs font-bold text-gray-600">ACTION</p>
-                              <p className="text-sm text-gray-800">{turn.action}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs font-bold text-gray-600">OUTCOME</p>
-                              <p className="text-sm text-gray-800">{turn.outcome}</p>
-                            </div>
-                            {index < timelineData.length - 1 && (
-                              <div className="flex items-center gap-2 pt-2">
-                                <ChevronRight className="w-4 h-4 text-purple-500" />
-                                <p className="text-xs text-gray-600">Leading to next turn...</p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
+                    {(optimizeAnalysis.weaknesses || []).map((warning) => (
+                      <div key={warning} className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{warning}</span>
                       </div>
                     ))}
-                  </div>
-                </div>
 
-                {/* Win Probability Trend Line */}
-                <div className="bg-white p-4 rounded-lg border-2 border-purple-200 mt-6">
-                  <p className="text-sm font-bold text-purple-900 mb-3">WIN PROBABILITY TREND</p>
-                  <ResponsiveContainer width="100%" height={150}>
-                    <LineChart data={timelineData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="turn" label={{ value: 'Turn', position: 'insideBottom', offset: -5 }} />
-                      <YAxis label={{ value: 'Win %', angle: -90, position: 'insideLeft' }} />
-                      <Tooltip />
-                      <Line type="monotone" dataKey="winProb" stroke="#a855f7" strokeWidth={3} dot={{ fill: '#a855f7', r: 6 }} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </div>
+                    {(optimizeAnalysis.nextBestSwaps || []).map((swap, index) => (
+                      <div key={`${swap.remove.cardId}-${swap.add.cardId}-${index}`} className="rounded-xl border border-emerald-200 bg-white p-4">
+                        <p className="font-semibold text-gray-900">Remove {swap.remove.cardName} {"->"} Add {swap.add.cardName}</p>
+                        <p className="mt-1 text-sm text-gray-600">{swap.reason}</p>
+                      </div>
+                    ))}
+
+                    {(optimizeAnalysis.recommendedCards || []).map((card) => (
+                      <div key={card.cardId} className="rounded-xl border border-cyan-200 bg-cyan-50 p-4">
+                        <p className="font-semibold text-cyan-950">{card.cardName}</p>
+                        <p className="mt-1 text-sm text-cyan-800">{card.explanation}</p>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </TabsContent>
+
+              <TabsContent value="ai" className="mt-5 space-y-4">
+                {!analysis ? (
+                  <div className="flex min-h-[300px] flex-col items-center justify-center rounded-xl border-2 border-dashed border-pink-200 bg-pink-50 text-center">
+                    {isAnalyzing ? (
+                      <>
+                        <LoaderCircle className="mb-4 h-12 w-12 animate-spin text-pink-500" />
+                        <p className="max-w-md text-sm text-pink-800">AI tumhare built deck ko analyze kar raha hai.</p>
+                      </>
+                    ) : (
+                      <>
+                        <Compass className="mb-4 h-12 w-12 text-pink-400" />
+                        <p className="max-w-md text-sm text-pink-800">Deck build karne ke baad `Analyze Deck With AI` dabao.</p>
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <Card className="border border-pink-200 bg-gradient-to-br from-pink-50 to-white p-4">
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <p className="text-sm font-bold text-pink-900">AI Summary</p>
+                        {providerInfo ? <Badge className="bg-slate-900 text-white">{providerInfo}</Badge> : null}
+                      </div>
+                      <p className="text-sm leading-7 text-gray-800">{analysis.summary}</p>
+                    </Card>
+
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                      <MetricTile label="Best Win %" value={`${analysis.bestMove.winProbability}%`} tone="pink" />
+                      <MetricTile label="Deck Win %" value={`${analyticsWinRate}%`} tone="emerald" />
+                      <MetricTile label="Best Pilot" value={pilotProfile.title} tone="violet" />
+                    </div>
+
+                    <div className="rounded-xl border border-violet-200 bg-violet-50 p-4">
+                      <p className="text-sm font-bold text-violet-950">Who Should Play This Deck?</p>
+                      <p className="mt-2 text-sm text-violet-900">{pilotProfile.note}</p>
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-3">
+                      <MoveCard move={analysis.bestMove} tone="yellow" />
+                      <MoveCard move={analysis.aggressiveMove} tone="red" />
+                      <MoveCard move={analysis.safeMove} tone="blue" />
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <Card className="border border-pink-200 p-4">
+                        <p className="mb-3 text-sm font-bold text-pink-900">Win Split</p>
+                        <ResponsiveContainer width="100%" height={250}>
+                          <PieChart>
+                            <Pie data={moveData} dataKey="value" outerRadius={82} label={({ name, value }) => `${name}: ${value}%`}>
+                              {moveData.map((entry, index) => (
+                                <Cell key={`${entry.name}-${index}`} fill={COLORS[index % COLORS.length]} />
+                              ))}
+                            </Pie>
+                            <Tooltip />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </Card>
+
+                      <Card className="border border-pink-200 p-4">
+                        <p className="mb-3 text-sm font-bold text-pink-900">Next Turns</p>
+                        <div className="space-y-3">
+                          {analysis.nextTurns.map((turn, index) => (
+                            <div key={`${turn.turnLabel}-${index}`} className="rounded-xl border border-pink-200 bg-pink-50 p-4">
+                              <div className="mb-2 flex items-center justify-between">
+                                <p className="font-semibold text-gray-900">{turn.turnLabel}</p>
+                                <Badge className="bg-pink-500 text-white">{turn.winProbability}%</Badge>
+                              </div>
+                              <p className="text-sm text-gray-700">{turn.action}</p>
+                              <p className="mt-1 text-xs text-gray-500">{turn.outcome}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </Card>
+                    </div>
+
+                    <Card className="border border-pink-200 p-4">
+                      <p className="mb-3 text-sm font-bold text-pink-900">Probability Trend</p>
+                      <ResponsiveContainer width="100%" height={240}>
+                        <LineChart data={analysis.nextTurns}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="turnLabel" />
+                          <YAxis />
+                          <Tooltip />
+                          <Line type="monotone" dataKey="winProbability" stroke="#ec4899" strokeWidth={3} dot={{ fill: "#ec4899", r: 5 }} />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </Card>
+
+                    <Card className="border border-pink-200 p-4">
+                      <p className="mb-3 text-sm font-bold text-pink-900">AI Recommendation Comparison</p>
+                      <ResponsiveContainer width="100%" height={240}>
+                        <BarChart data={moveData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="name" />
+                          <YAxis domain={[0, 100]} />
+                          <Tooltip />
+                          <Bar dataKey="value" radius={[6, 6, 0, 0]}>
+                            {moveData.map((entry, index) => (
+                              <Cell key={`${entry.name}-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </Card>
+                  </>
+                )}
+              </TabsContent>
+            </Tabs>
           </Card>
-        </>
-      )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FilterSelect({ label, value, setValue, options }: { label: string; value: string; setValue: (value: string) => void; options: string[] }) {
+  const getOptionLabel = (option: string) => {
+    if (option === "all") return label === "Type" ? "All Types" : "All Colors";
+    if (label === "Type") {
+      if (option === "leader") return "Leader";
+      if (option === "character") return "Character";
+      if (option === "event") return "Event";
+      if (option === "stage") return "Stage";
+    }
+    return option.charAt(0).toUpperCase() + option.slice(1);
+  };
+
+  return (
+    <div className="rounded-xl border border-cyan-200 bg-white p-4">
+      <label className="mb-2 block text-xs font-bold text-cyan-900">{label}</label>
+      <Select value={value} onValueChange={setValue}>
+        <SelectTrigger className="border-cyan-200">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option} value={option}>
+              {getOptionLabel(option)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function MetricTile({ label, value, tone }: { label: string; value: string; tone: "pink" | "violet" | "cyan" | "emerald" }) {
+  const tones = {
+    pink: "border-pink-200 bg-pink-50 text-pink-900",
+    violet: "border-violet-200 bg-violet-50 text-violet-900",
+    cyan: "border-cyan-200 bg-cyan-50 text-cyan-900",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-900",
+  };
+  return (
+    <div className={`rounded-xl border p-3 ${tones[tone]}`}>
+      <p className="text-xs font-semibold uppercase tracking-wide">{label}</p>
+      <p className="mt-1 text-2xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function MiniInput({ label, value, setValue }: { label: string; value: string; setValue: (value: string) => void }) {
+  return (
+    <div className="rounded-xl border border-purple-200 bg-white p-3">
+      <label className="mb-2 block text-xs font-bold text-purple-900">{label}</label>
+      <input type="number" min="0" value={value} onChange={(event) => setValue(event.target.value)} className="w-full rounded-lg border border-purple-200 px-3 py-2" />
+    </div>
+  );
+}
+
+function ToggleRow({ title, checked, setChecked }: { title: string; checked: boolean; setChecked: (checked: boolean) => void }) {
+  return (
+    <label className="flex items-center justify-between rounded-xl border border-purple-200 bg-white p-4">
+      <span className="text-sm font-medium text-gray-900">{title}</span>
+      <input type="checkbox" checked={checked} onChange={(event) => setChecked(event.target.checked)} />
+    </label>
+  );
+}
+
+function CardEntry({
+  card,
+  count,
+  onAdd,
+  onRemove,
+}: {
+  card: CardData;
+  count: number;
+  onAdd: (card: CardData) => void;
+  onRemove: (card: CardData) => void;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mb-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+        {card.imageUrl ? (
+          <img src={card.imageUrl} alt={card.name} className="aspect-[2.5/3.5] w-full object-cover" loading="lazy" />
+        ) : (
+          <div className="flex aspect-[2.5/3.5] items-center justify-center text-xs text-slate-400">No Image</div>
+        )}
+      </div>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate font-semibold text-gray-900">{card.name}</p>
+          <p className="text-xs text-gray-500">{card.number}</p>
+        </div>
+        {count > 0 ? <Badge className="bg-slate-900 text-white">x{count}</Badge> : null}
+      </div>
+      <div className="mb-3 flex flex-wrap gap-2">
+        <Badge className="bg-blue-100 text-blue-800">{card.type}</Badge>
+        <Badge className="bg-yellow-100 text-yellow-800">Cost {card.cost}</Badge>
+        {card.color ? <Badge className="bg-slate-100 text-slate-800">{card.color}</Badge> : null}
+      </div>
+      {card.effect ? <p className="mb-3 line-clamp-3 text-xs text-gray-600">{card.effect}</p> : null}
+      <div className="flex gap-2">
+        {count > 0 ? <Button size="sm" variant="outline" className="flex-1" onClick={() => onRemove(card)}>-1</Button> : null}
+        <Button size="sm" className="flex-1" onClick={() => onAdd(card)}>{card.type === "Leader" ? "Select Leader" : "+1 Add"}</Button>
+      </div>
+    </div>
+  );
+}
+
+function MoveCard({ move, tone }: { move: CoachMove; tone: "yellow" | "red" | "blue" }) {
+  const shell =
+    tone === "yellow"
+      ? "border-yellow-300 bg-gradient-to-br from-yellow-50 to-amber-50"
+      : tone === "red"
+        ? "border-red-300 bg-gradient-to-br from-red-50 to-rose-50"
+        : "border-blue-300 bg-gradient-to-br from-blue-50 to-cyan-50";
+
+  return (
+    <div className={`rounded-2xl border-2 p-5 ${shell}`}>
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-lg font-bold text-gray-900">{move.title}</p>
+          <p className="mt-1 text-sm text-gray-700">{move.plan}</p>
+        </div>
+        <Badge className="bg-slate-900 text-white">{move.winProbability}%</Badge>
+      </div>
+      <div className="mb-4 flex flex-wrap gap-2">
+        <span className="rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{move.riskLevel} Risk</span>
+        <span className="rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">Card Flow {move.cardAdvantage}</span>
+      </div>
+      <div className="space-y-2">
+        {move.actions.map((action) => (
+          <div key={action} className="flex items-start gap-2 text-sm text-gray-800">
+            <span className="mt-1 h-2 w-2 rounded-full bg-slate-500" />
+            <span>{action}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

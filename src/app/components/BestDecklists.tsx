@@ -497,14 +497,14 @@ ${deckList.cards.map((card) => `${card.count}x ${card.name} (${card.number})`).j
                         </Button>
                       </div>
 
-                      <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 xl:grid-cols-12 gap-2">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
                         {deck.cards.map((card) => (
                           <div
                             key={card.id}
                             className="relative group cursor-pointer transition-all hover:scale-105 hover:z-10"
                             title={`${card.name} (${card.number}) x${card.count}`}
                           >
-                            <div className="relative aspect-[2/3] rounded-md border-2 border-white overflow-hidden shadow-md bg-gradient-to-br from-red-500 to-rose-600">
+                            <div className="relative aspect-[2/3] rounded-lg border-2 border-white overflow-hidden shadow-lg bg-gradient-to-br from-red-500 to-rose-600">
                               {card.image ? (
                                 <img
                                   src={card.image}
@@ -523,20 +523,20 @@ ${deckList.cards.map((card) => `${card.count}x ${card.name} (${card.number})`).j
                               )}
 
                               {card.count > 0 && (
-                                <div className="absolute top-1 right-1 min-w-6 h-6 px-1 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center font-bold text-white shadow-md border-2 border-white text-xs">
+                                <div className="absolute top-2 right-2 min-w-7 h-7 px-1 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-full flex items-center justify-center font-bold text-white shadow-md border-2 border-white text-xs">
                                   {card.count}
                                 </div>
                               )}
 
-                              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-2">
-                                <p className="text-white font-bold text-[10px] leading-tight line-clamp-2">{card.name}</p>
-                                <p className="text-gray-200 text-[10px]">{card.number}</p>
+                              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/60 to-transparent p-3">
+                                <p className="text-white font-bold text-xs leading-tight line-clamp-2">{card.name}</p>
+                                <p className="text-gray-200 text-[11px]">{card.number}</p>
                               </div>
 
-                              <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-2 text-center">
-                                <p className="text-white font-bold text-xs leading-tight mb-1">{card.name}</p>
-                                <p className="text-gray-300 text-[10px]">{card.number}</p>
-                                <p className="text-yellow-400 text-[10px] mt-1">x{card.count}</p>
+                              <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-3 text-center">
+                                <p className="text-white font-bold text-sm leading-tight mb-1">{card.name}</p>
+                                <p className="text-gray-300 text-xs">{card.number}</p>
+                                <p className="text-yellow-400 text-xs mt-1">x{card.count}</p>
                               </div>
                             </div>
                           </div>
