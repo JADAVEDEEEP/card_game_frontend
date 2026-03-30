@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { AlertCircle, BarChart3, Brain, CheckCircle, Crown, Layers, RefreshCw, Save, Sparkles, Target, Upload } from "lucide-react";
+import { AlertCircle, BarChart3, Brain, CheckCircle, Crown, Layers, RefreshCw, Save, Sparkles, Target, Upload, X } from "lucide-react";
 import { Card } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -39,6 +39,7 @@ type CardData = {
   attribute?: string;
   effect: string;
   trigger?: string;
+  imageUrl?: string;
 };
 
 type CardSlot = {
@@ -52,7 +53,17 @@ type GuideAssistResponse = {
   answer: string;
 };
 
+type CardIntelResult = {
+  summary: string;
+  comboPartners: Array<{ cardId: string; reason: string }>;
+  replacementCards: Array<{ cardId: string; reason: string }>;
+  weakSpots: string[];
+  bestFor: string;
+};
+
 const SLOT_COUNT = 15;
+const CATALOG_PAGE_SIZE = 8;
+const CARD_INTELLIGENCE_STORAGE_KEY = "cardActionIntelligence_persist_enabled";
 
 const safeJsonParse = <T,>(value: string | null, fallback: T): T => {
   if (!value) return fallback;
@@ -80,13 +91,21 @@ const toCardData = (card: ApiCard): CardData => ({
   attribute: String(card.attribute || "").trim() || undefined,
   effect: String(card.effect || "").trim(),
   trigger: String(card.trigger || "").trim() || undefined,
+  imageUrl: card.id ? withApiBase(`/cardsApi/image/${encodeURIComponent(String(card.id).trim())}`) : undefined,
 });
 
 const buildEmptySlots = () => Array.from({ length: SLOT_COUNT }, () => ({ card: null, count: 1 } as CardSlot));
 
+const normalizeCardCode = (value: string) => {
+  const cleaned = value.toUpperCase().trim();
+  const compactMatch = cleaned.match(/\b([A-Z]{1,4}(?:\d{1,2})?)-?(\d{2,3})\b/);
+  if (!compactMatch) return "";
+
+  return `${compactMatch[1]}-${compactMatch[2]}`;
+};
+
 const extractCardCode = (value: string) => {
-  const match = value.toUpperCase().match(/[A-Z]{2,}[0-9A-Z-]*/);
-  return match ? match[0].trim() : "";
+  return normalizeCardCode(value);
 };
 
 const normalizeImportEntries = (payload: unknown) => {
@@ -106,7 +125,7 @@ const normalizeImportedLeaderCode = (payload: unknown) => {
   const leader = objectPayload.leader;
   if (!leader || typeof leader !== "object") return "";
   const leaderRecord = leader as Record<string, unknown>;
-  return String(leaderRecord.card_code || leaderRecord.code || leaderRecord.id || "").trim().toUpperCase();
+  return extractCardCode(String(leaderRecord.card_code || leaderRecord.code || leaderRecord.id || ""));
 };
 
 export function CardActionIntelligence() {
@@ -123,10 +142,15 @@ export function CardActionIntelligence() {
   const [loadingCards, setLoadingCards] = useState(true);
   const [loadingDeckAI, setLoadingDeckAI] = useState(false);
   const [loadingCardAI, setLoadingCardAI] = useState(false);
+  const [loadingUpgradeAI, setLoadingUpgradeAI] = useState(false);
   const [deckAiAnswer, setDeckAiAnswer] = useState("");
   const [cardAiAnswer, setCardAiAnswer] = useState("");
+  const [upgradeAiAnswer, setUpgradeAiAnswer] = useState("");
+  const [cardIntelResult, setCardIntelResult] = useState<CardIntelResult | null>(null);
   const [providerInfo, setProviderInfo] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [persistenceEnabled, setPersistenceEnabled] = useState(false);
+  const [visibleCatalogCount, setVisibleCatalogCount] = useState(CATALOG_PAGE_SIZE);
 
   useEffect(() => {
     const loadCards = async () => {
@@ -139,14 +163,21 @@ export function CardActionIntelligence() {
         const normalized = data.map(toCardData).filter((card) => card.id && card.name);
         setAllCards(normalized);
 
-        const storedLeader = safeJsonParse<CardData | null>(
-          localStorage.getItem("cardActionIntelligence_selectedLeader"),
-          null
-        );
-        const storedCards = safeJsonParse<Array<CardSlot | CardData>>(
-          localStorage.getItem("cardActionIntelligence_selectedCards"),
-          []
-        );
+        const shouldRestore =
+          localStorage.getItem(CARD_INTELLIGENCE_STORAGE_KEY) === "true";
+
+        const storedLeader = shouldRestore
+          ? safeJsonParse<CardData | null>(
+              localStorage.getItem("cardActionIntelligence_selectedLeader"),
+              null
+            )
+          : null;
+        const storedCards = shouldRestore
+          ? safeJsonParse<Array<CardSlot | CardData>>(
+              localStorage.getItem("cardActionIntelligence_selectedCards"),
+              []
+            )
+          : [];
 
         if (storedLeader?.id) {
           const matchedLeader = normalized.find((card) => card.id === storedLeader.id) || storedLeader;
@@ -183,6 +214,8 @@ export function CardActionIntelligence() {
     }
 
     storageTimeoutRef.current = window.setTimeout(() => {
+      if (!persistenceEnabled) return;
+      localStorage.setItem(CARD_INTELLIGENCE_STORAGE_KEY, "true");
       localStorage.setItem("cardActionIntelligence_selectedLeader", JSON.stringify(selectedLeader));
       localStorage.setItem(
         "cardActionIntelligence_selectedCards",
@@ -195,7 +228,7 @@ export function CardActionIntelligence() {
         window.clearTimeout(storageTimeoutRef.current);
       }
     };
-  }, [selectedLeader, selectedSlots]);
+  }, [selectedLeader, selectedSlots, persistenceEnabled]);
 
   const leaders = useMemo(
     () => allCards.filter((card) => card.type === "Leader"),
@@ -206,6 +239,19 @@ export function CardActionIntelligence() {
     () => allCards.filter((card) => card.type !== "Leader"),
     [allCards]
   );
+  const visibleCatalogCards = useMemo(
+    () => nonLeaderCards.slice(0, visibleCatalogCount),
+    [nonLeaderCards, visibleCatalogCount]
+  );
+  const hasMoreCatalogCards = visibleCatalogCount < nonLeaderCards.length;
+  const allCardsById = useMemo(
+    () => new Map(allCards.map((card) => [card.id, card])),
+    [allCards]
+  );
+
+  useEffect(() => {
+    setVisibleCatalogCount(CATALOG_PAGE_SIZE);
+  }, [nonLeaderCards.length]);
 
   const selectedCard = selectedSlotIndex !== null ? selectedSlots[selectedSlotIndex]?.card || null : null;
   const isSelectingEmptySlot =
@@ -219,6 +265,14 @@ export function CardActionIntelligence() {
   const colorMatchCount = selectedLeader
     ? usedCards.filter((slot) => slot.card?.color.toLowerCase().includes(selectedLeader.color.toLowerCase())).length
     : 0;
+  const comboPartnerCards = useMemo(
+    () => (cardIntelResult?.comboPartners || []).map((item) => ({ reason: item.reason, card: allCardsById.get(item.cardId) || null })).filter((item) => item.card),
+    [cardIntelResult, allCardsById]
+  );
+  const replacementCards = useMemo(
+    () => (cardIntelResult?.replacementCards || []).map((item) => ({ reason: item.reason, card: allCardsById.get(item.cardId) || null })).filter((item) => item.card),
+    [cardIntelResult, allCardsById]
+  );
 
   const handleCardSelect = (slotIndex: number, cardId: string) => {
     const card = nonLeaderCards.find((item) => item.id === cardId);
@@ -229,7 +283,7 @@ export function CardActionIntelligence() {
       next[slotIndex] = { card, count: current[slotIndex]?.count || 1 };
       return next;
     });
-    setSelectedSlotIndex(null);
+    setSelectedSlotIndex(slotIndex);
   };
 
   const handleCardCountChange = (slotIndex: number, count: number) => {
@@ -239,6 +293,53 @@ export function CardActionIntelligence() {
         ...next[slotIndex],
         count: Math.max(1, Math.min(4, count)),
       };
+      return next;
+    });
+  };
+
+  const addCardDirect = (card: CardData) => {
+    let nextSelectedIndex: number | null = null;
+    setSelectedSlots((current) => {
+      const existingIndex = current.findIndex((slot) => slot.card?.id === card.id);
+      if (existingIndex >= 0) {
+        const next = [...current];
+        const currentCount = next[existingIndex].count || 1;
+        nextSelectedIndex = existingIndex;
+        next[existingIndex] = {
+          ...next[existingIndex],
+          count: Math.max(1, Math.min(4, currentCount + 1)),
+        };
+        return next;
+      }
+
+      const emptyIndex = current.findIndex((slot) => !slot.card);
+      if (emptyIndex === -1) return current;
+
+      const next = [...current];
+      nextSelectedIndex = emptyIndex;
+      next[emptyIndex] = { card, count: 1 };
+      return next;
+    });
+    if (nextSelectedIndex !== null) {
+      setSelectedSlotIndex(nextSelectedIndex);
+    }
+  };
+
+  const removeCardDirect = (cardId: string) => {
+    setSelectedSlots((current) => {
+      const existingIndex = current.findIndex((slot) => slot.card?.id === cardId);
+      if (existingIndex === -1) return current;
+
+      const next = [...current];
+      const currentCount = next[existingIndex].count || 1;
+      if (currentCount <= 1) {
+        next[existingIndex] = { card: null, count: 1 };
+      } else {
+        next[existingIndex] = {
+          ...next[existingIndex],
+          count: currentCount - 1,
+        };
+      }
       return next;
     });
   };
@@ -282,6 +383,8 @@ export function CardActionIntelligence() {
     setSelectedSlotIndex(firstFilledSlot >= 0 ? firstFilledSlot : null);
     setDeckAiAnswer("");
     setCardAiAnswer("");
+    setUpgradeAiAnswer("");
+    setCardIntelResult(null);
 
     if (missingCodes.length > 0) {
       setError(`Kuch cards import nahi hue: ${missingCodes.slice(0, 5).join(", ")}${missingCodes.length > 5 ? "..." : ""}`);
@@ -298,13 +401,37 @@ export function CardActionIntelligence() {
       throw new Error("Import file empty hai.");
     }
 
-    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-      const parsed = JSON.parse(trimmed) as unknown;
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      parsed = null;
+    }
+
+    if (parsed) {
       const leaderCodeFromJson = normalizeImportedLeaderCode(parsed);
       const importedEntries = normalizeImportEntries(parsed)
         .map((entry) => {
+          if (typeof entry === "string") {
+            const strict = entry.match(/^(\d+)\s*x\s*([A-Za-z]{1,5}\d{2}-\d{3}(?:[_-][A-Za-z0-9]+)?)$/i);
+            if (strict) {
+              return {
+                code: extractCardCode(strict[2]),
+                count: Math.max(1, Math.min(4, toNumber(strict[1], 1))),
+              };
+            }
+
+            const code = extractCardCode(entry);
+            const countMatch = entry.match(/(?:x|qty|count)?\s*(\d+)|(\d+)\s*x/i);
+            const rawCount = countMatch?.[1] || countMatch?.[2] || "1";
+            return {
+              code,
+              count: Math.max(1, Math.min(4, toNumber(rawCount, 1))),
+            };
+          }
+
           const record = entry as Record<string, unknown>;
-          const code = String(record.card_code || record.code || record.id || record.number || "").trim().toUpperCase();
+          const code = extractCardCode(String(record.card_code || record.code || record.id || record.number || ""));
           const count = Math.max(1, Math.min(4, toNumber(record.count ?? record.qty ?? record.quantity, 1)));
           return { code, count };
         })
@@ -331,13 +458,66 @@ export function CardActionIntelligence() {
         return;
       }
 
+      const strictCountFirst = line.match(/^(\d+)\s*x\s*([A-Za-z]{1,5}\d{2}-\d{3}(?:[_-][A-Za-z0-9]+)?)$/i);
+      if (strictCountFirst) {
+        cards.push({
+          code: extractCardCode(strictCountFirst[2]),
+          count: Math.max(1, Math.min(4, toNumber(strictCountFirst[1], 1))),
+        });
+        return;
+      }
+
+      const strictCodeFirst = line.match(/^([A-Za-z]{1,5}\d{2}-\d{3}(?:[_-][A-Za-z0-9]+)?)\s*(?:x\s*(\d+)|(\d+)\s*x?)?$/i);
+      if (strictCodeFirst) {
+        const strictCode = extractCardCode(strictCodeFirst[1]);
+        const rawStrictCount = strictCodeFirst[2] || strictCodeFirst[3] || "1";
+
+        if (!leaderCode && cards.length === 0) {
+          const matchedLeader = leaders.find(
+            (leader) => leader.number.toUpperCase() === strictCode || leader.id.toUpperCase() === strictCode
+          );
+          if (matchedLeader) {
+            leaderCode = matchedLeader.number.toUpperCase();
+            return;
+          }
+        }
+
+        cards.push({
+          code: strictCode,
+          count: Math.max(1, Math.min(4, toNumber(rawStrictCount, 1))),
+        });
+        return;
+      }
+
       const code = extractCardCode(line);
       if (!code) return;
 
-      const countMatch = line.match(/(?:x|qty|count)?\s*(\d+)/i);
-      const count = countMatch ? Math.max(1, Math.min(4, toNumber(countMatch[1], 1))) : 1;
+      if (!leaderCode && cards.length === 0) {
+        const matchedLeader = leaders.find(
+          (leader) => leader.number.toUpperCase() === code || leader.id.toUpperCase() === code
+        );
+        if (matchedLeader) {
+          leaderCode = matchedLeader.number.toUpperCase();
+          return;
+        }
+      }
+
+      const countMatch = line.match(/(?:x|qty|count)?\s*(\d+)|(\d+)\s*x/i);
+      const rawCount = countMatch?.[1] || countMatch?.[2] || "1";
+      const count = Math.max(1, Math.min(4, toNumber(rawCount, 1)));
       cards.push({ code, count });
     });
+
+    if (!leaderCode && cards.length > 0) {
+      const firstEntry = cards[0];
+      const matchedLeader = leaders.find(
+        (leader) => leader.number.toUpperCase() === firstEntry.code || leader.id.toUpperCase() === firstEntry.code
+      );
+      if (matchedLeader) {
+        leaderCode = matchedLeader.number.toUpperCase();
+        cards.shift();
+      }
+    }
 
     return { leaderCode, cards };
   };
@@ -355,6 +535,7 @@ export function CardActionIntelligence() {
       }
 
       applyImportedDeck(parsedDeck.leaderCode, parsedDeck.cards);
+      setPersistenceEnabled(true);
     } catch (importError) {
       setError(importError instanceof Error ? importError.message : "Deck import failed.");
     } finally {
@@ -392,7 +573,7 @@ export function CardActionIntelligence() {
         },
         body: JSON.stringify({
           topic: "Card Action Intelligence",
-          question: "Analyze this deck core and explain the game plan, strengths, weak spots, and what AI Coach should focus on next.",
+          question: "Give a full overview of this deck core, explain the current game plan, strongest parts, weakest parts, and the top improvements or imports I should make next.",
           context: buildDeckContext(),
         }),
       });
@@ -459,6 +640,127 @@ export function CardActionIntelligence() {
     }
   };
 
+  const runUpgradeAiAnalysis = async () => {
+    if (!selectedCard) {
+      setError("Select a card first to get combo and replacement advice.");
+      return;
+    }
+
+    setLoadingUpgradeAI(true);
+    setError(null);
+
+    try {
+      const response = await fetch(withApiBase("/ai/guide-assist"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          topic: "Card Action Intelligence",
+          question:
+            `For ${selectedCard.name}, explain best combo partners in this deck, when it feels weak, what replacement direction to try if I cut it, and what type of player should keep using it.`,
+          context: [
+            `Leader: ${selectedLeader?.name || "Not selected"} (${selectedLeader?.number || ""})`,
+            `Selected card: ${selectedCard.name} (${selectedCard.number})`,
+            `Type: ${selectedCard.type}`,
+            `Color: ${selectedCard.color}`,
+            `Cost: ${selectedCard.cost}`,
+            `Power: ${selectedCard.power || "n/a"}`,
+            `Counter: ${selectedCard.counter || "n/a"}`,
+            `Effect: ${selectedCard.effect || "n/a"}`,
+            selectedCard.trigger ? `Trigger: ${selectedCard.trigger}` : "",
+            `Deck context:\n${buildDeckContext()}`,
+            "Answer in short sections titled: Combo Partners, Weak Spots, Replacement Direction, Best For.",
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        }),
+      });
+
+      const data = (await response.json()) as Partial<GuideAssistResponse> & { message?: string };
+      if (!response.ok || !data.answer) {
+        throw new Error(data.message || "Failed to get replacement/combo AI analysis.");
+      }
+
+      setUpgradeAiAnswer(data.answer);
+      setProviderInfo(`${data.provider || "ai"} â€¢ ${data.model || ""}`.trim());
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : "Failed to analyze replacement/combo paths.");
+    } finally {
+      setLoadingUpgradeAI(false);
+    }
+  };
+
+  const runUpgradeAiStructuredAnalysis = async () => {
+    if (!selectedCard) {
+      setError("Select a card first to get combo and replacement advice.");
+      return;
+    }
+
+    setLoadingUpgradeAI(true);
+    setError(null);
+    setCardIntelResult(null);
+
+    try {
+      const candidateCards = nonLeaderCards
+        .filter((card) => {
+          if (!selectedLeader?.color) return true;
+          return card.color.toLowerCase().includes(selectedLeader.color.toLowerCase()) || card.type === selectedCard.type;
+        })
+        .slice(0, 40)
+        .map((card) => ({
+          id: card.id,
+          name: card.name,
+          type: card.type,
+          color: card.color,
+          cost: card.cost,
+          power: card.power || 0,
+          counter: card.counter || 0,
+          effect: card.effect || "",
+        }));
+
+      const response = await fetch(withApiBase("/ai/card-intel"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          selectedLeader,
+          selectedCard,
+          deckCards: usedCards.map((slot) => ({
+            id: slot.card?.id || "",
+            name: slot.card?.name || "",
+            type: slot.card?.type || "",
+            color: slot.card?.color || "",
+            cost: slot.card?.cost || 0,
+            power: slot.card?.power || 0,
+            counter: slot.card?.counter || 0,
+            effect: slot.card?.effect || "",
+          })),
+          candidateCards,
+        }),
+      });
+
+      const data = (await response.json()) as {
+        provider?: string;
+        model?: string;
+        result?: CardIntelResult;
+        message?: string;
+      };
+      if (!response.ok || !data.result) {
+        throw new Error(data.message || "Failed to get replacement/combo AI analysis.");
+      }
+
+      setCardIntelResult(data.result);
+      setUpgradeAiAnswer(data.result.summary || "");
+      setProviderInfo(`${data.provider || "ai"} • ${data.model || ""}`.trim());
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : "Failed to analyze replacement/combo paths.");
+    } finally {
+      setLoadingUpgradeAI(false);
+    }
+  };
+
   const handleSaveDeck = () => {
     if (!selectedLeader) {
       setError("Please select a leader first.");
@@ -471,7 +773,35 @@ export function CardActionIntelligence() {
     }
 
     setError(null);
+    setPersistenceEnabled(true);
     setShowSaveModal(true);
+  };
+
+  const handleResetWorkspace = () => {
+    setSelectedLeader(null);
+    setSelectedSlots(buildEmptySlots());
+    setSelectedSlotIndex(null);
+    setDeckAiAnswer("");
+    setCardAiAnswer("");
+    setUpgradeAiAnswer("");
+    setCardIntelResult(null);
+    setProviderInfo("");
+    setDeckName("");
+    setShowSaveModal(false);
+    setSavedSuccess(false);
+    setError(null);
+    setPersistenceEnabled(false);
+    localStorage.removeItem("cardActionIntelligence_selectedLeader");
+    localStorage.removeItem("cardActionIntelligence_selectedCards");
+    localStorage.removeItem(CARD_INTELLIGENCE_STORAGE_KEY);
+  };
+
+  const runUnifiedCardAi = async () => {
+    await Promise.all([
+      runSelectedCardAiAnalysis(),
+      runUpgradeAiStructuredAnalysis(),
+      selectedLeader && usedCards.length > 0 ? runDeckAiAnalysis() : Promise.resolve(),
+    ]);
   };
 
   const confirmSaveDeck = async () => {
@@ -559,7 +889,7 @@ export function CardActionIntelligence() {
         </Card>
       ) : null}
 
-      <Card className="p-6 transition-all bg-gradient-to-br from-yellow-50 to-orange-50 border-2 border-yellow-300">
+      <Card className="p-5 transition-all bg-gradient-to-br from-yellow-50 to-orange-50 border border-yellow-300">
         <div className="space-y-4">
           <div className="flex items-start justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3">
@@ -575,7 +905,7 @@ export function CardActionIntelligence() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".txt,.json"
+                accept=".txt,.json,.csv,.deck"
                 onChange={handleImportFile}
                 className="hidden"
               />
@@ -586,6 +916,15 @@ export function CardActionIntelligence() {
               >
                 <Upload className="w-4 h-4" />
                 Import Deck File
+              </Button>
+              <Button
+                onClick={handleResetWorkspace}
+                type="button"
+                variant="outline"
+                className="w-full border-red-200 text-red-700 hover:bg-red-50"
+              >
+                <X className="w-4 h-4 mr-2" />
+                Reset Workspace
               </Button>
               <p className="text-xs text-yellow-800 max-w-xs">
                 `.json` ya `.txt` file import karo. Example: `Leader: OP01-001` aur next lines `OP01-016 x4`
@@ -611,10 +950,20 @@ export function CardActionIntelligence() {
 
           {selectedLeader ? (
             <div className="bg-white p-4 rounded-xl border-2 border-yellow-300">
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge className="bg-yellow-100 text-yellow-900">{selectedLeader.name}</Badge>
-                <Badge className="bg-orange-100 text-orange-900">{selectedLeader.color || "Unknown color"}</Badge>
-                <Badge className="bg-slate-100 text-slate-800">{selectedLeader.number}</Badge>
+              <div className="flex flex-wrap items-start gap-3">
+                {selectedLeader.imageUrl ? (
+                  <img
+                    src={selectedLeader.imageUrl}
+                    alt={selectedLeader.name}
+                    className="h-24 w-16 rounded-lg border border-yellow-200 object-cover"
+                    loading="lazy"
+                  />
+                ) : null}
+                <div className="flex flex-wrap items-center gap-3">
+                  <Badge className="bg-yellow-100 text-yellow-900">{selectedLeader.name}</Badge>
+                  <Badge className="bg-orange-100 text-orange-900">{selectedLeader.color || "Unknown color"}</Badge>
+                  <Badge className="bg-slate-100 text-slate-800">{selectedLeader.number}</Badge>
+                </div>
               </div>
               <p className="text-sm text-gray-700 mt-3">{selectedLeader.effect || "No effect text available from the cards API."}</p>
             </div>
@@ -622,8 +971,8 @@ export function CardActionIntelligence() {
         </div>
       </Card>
 
-      <div className="grid lg:grid-cols-12 gap-6">
-        <Card className="lg:col-span-5 p-6 transition-all bg-gradient-to-br from-indigo-50 to-violet-50 border-2 border-indigo-300">
+      <div className="grid lg:grid-cols-12 gap-5">
+        <Card className="lg:col-span-5 p-5 transition-all bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-300">
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-indigo-500">
@@ -635,115 +984,139 @@ export function CardActionIntelligence() {
               </div>
             </div>
 
-            <div className="bg-white p-4 rounded-xl border-2 border-indigo-200">
+            <div className="bg-white p-4 rounded-xl border border-indigo-200">
               <div className="flex items-center justify-between gap-3 mb-3">
-                <p className="text-sm font-bold text-indigo-900">Quick Card Picker</p>
-                {isSelectingEmptySlot ? (
-                  <Badge className="bg-indigo-100 text-indigo-900">Adding to slot {(selectedSlotIndex || 0) + 1}</Badge>
-                ) : (
-                  <Badge className="bg-slate-100 text-slate-800">Click an empty slot first</Badge>
-                )}
+                <p className="text-sm font-bold text-indigo-900">Selected Deck Cards</p>
+                <Badge className="bg-indigo-100 text-indigo-900">{usedCards.length}/{SLOT_COUNT} cards</Badge>
               </div>
-              <Select
-                onValueChange={(value) => {
-                  if (selectedSlotIndex !== null) {
-                    handleCardSelect(selectedSlotIndex, value);
-                  }
-                }}
-                value=""
-                disabled={loadingCards || selectedSlotIndex === null}
-              >
-                <SelectTrigger className="w-full border-indigo-300">
-                  <SelectValue
-                    placeholder={
-                      loadingCards
-                        ? "Loading cards..."
-                        : selectedSlotIndex === null
-                        ? "Choose a slot to add a card"
-                        : selectedSlots[selectedSlotIndex]?.card
-                        ? "Selected slot already filled"
-                        : `Select card for slot ${selectedSlotIndex + 1}`
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {nonLeaderCards.map((card) => (
-                    <SelectItem key={card.id} value={card.id}>
-                      {card.name} - {card.number}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-3 gap-3">
-              {selectedSlots.map((slot, index) => (
-                <div
-                  key={index}
-                  onClick={() => setSelectedSlotIndex(index)}
-                  className={`relative p-3 rounded-lg border-2 transition-all cursor-pointer ${
-                    selectedSlotIndex === index
-                      ? "border-indigo-500 bg-indigo-100 shadow-lg"
-                      : slot.card
-                      ? "border-indigo-300 bg-white hover:border-indigo-400 hover:shadow-md"
-                      : "border-dashed border-gray-300 bg-white hover:border-indigo-300"
-                  }`}
-                >
-                  <div className="space-y-2">
-                    <Badge className="text-xs bg-indigo-500 text-white">Slot {index + 1}</Badge>
-                    {!slot.card ? (
-                      <div>
-                        <Button
-                          type="button"
-                          className="w-full border border-dashed border-indigo-300 bg-white text-indigo-700 hover:bg-indigo-50"
-                          variant="outline"
-                        >
-                          {selectedSlotIndex === index ? "Pick from quick picker" : "Add Card"}
-                        </Button>
-                        <div className="mt-2 aspect-[3/4] bg-gradient-to-br from-gray-100 to-gray-200 rounded border-2 border-dashed border-gray-300 flex items-center justify-center">
-                          <Layers className="w-6 h-6 text-gray-400" />
-                        </div>
+              {usedCards.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-indigo-200 bg-indigo-50 p-6 text-center text-sm text-indigo-700">
+                  Add cards directly from the catalog below.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {usedCards.map((slot) => (
+                    <div key={slot.card?.id} className="flex items-start gap-3 rounded-lg border border-indigo-200 bg-slate-50 p-3">
+                      <div className="h-20 w-14 shrink-0 overflow-hidden rounded-md border border-indigo-200 bg-white">
+                        {slot.card?.imageUrl ? (
+                          <img
+                            src={slot.card.imageUrl}
+                            alt={slot.card.name}
+                            className="h-full w-full object-cover"
+                            loading="lazy"
+                          />
+                        ) : null}
                       </div>
-                    ) : (
-                      <>
-                        <div className="aspect-[3/4] bg-gradient-to-br from-blue-400 to-purple-600 rounded border-2 border-indigo-400 flex items-center justify-center relative overflow-hidden">
-                          <div className="text-center text-white p-2">
-                            <p className="text-xs font-bold truncate">{slot.card.name}</p>
-                            <p className="text-xs mt-1">{slot.card.number}</p>
-                          </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-semibold text-gray-900 line-clamp-2">{slot.card?.name}</p>
+                        <p className="text-xs text-gray-500">{slot.card?.number}</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Badge className="bg-blue-100 text-blue-800 text-xs">{slot.card?.type}</Badge>
+                          <Badge className="bg-yellow-100 text-yellow-800 text-xs">Cost {slot.card?.cost}</Badge>
                         </div>
-                        <div className="flex items-center justify-between text-xs">
-                          <Badge className="bg-gray-100 text-gray-800 px-1 py-0">{slot.card.type}</Badge>
-                          <Badge className="bg-yellow-100 text-yellow-800 px-1 py-0">Cost {slot.card.cost}</Badge>
-                        </div>
-                        <div className="mt-2 flex items-center justify-center gap-1">
+                        <div className="mt-3 flex items-center gap-2">
                           <Button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleCardCountChange(index, slot.count - 1);
-                            }}
-                            className="h-6 w-6 p-0 bg-indigo-500 hover:bg-indigo-600 text-white"
-                            disabled={slot.count <= 1}
+                            type="button"
+                            size="sm"
+                            onClick={() => removeCardDirect(slot.card?.id || "")}
+                            className="h-8 min-w-8 px-0 bg-indigo-500 hover:bg-indigo-600 text-white"
                           >
                             -
                           </Button>
-                          <div className="bg-yellow-400 text-yellow-900 px-2 py-1 rounded font-bold text-sm">x{slot.count}</div>
+                          <div className="rounded bg-yellow-400 px-2 py-1 text-sm font-bold text-yellow-900">x{slot.count}</div>
                           <Button
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleCardCountChange(index, slot.count + 1);
-                            }}
-                            className="h-6 w-6 p-0 bg-indigo-500 hover:bg-indigo-600 text-white"
+                            type="button"
+                            size="sm"
+                            onClick={() => slot.card && addCardDirect(slot.card)}
+                            className="h-8 min-w-8 px-0 bg-indigo-500 hover:bg-indigo-600 text-white"
                             disabled={slot.count >= 4}
                           >
                             +
                           </Button>
                         </div>
-                      </>
-                    )}
-                  </div>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
+            </div>
+
+            <div className="bg-white p-4 rounded-xl border border-indigo-200">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <p className="text-sm font-bold text-indigo-900">Card Catalog</p>
+                <Badge className="bg-slate-100 text-slate-800">{nonLeaderCards.length} cards</Badge>
+              </div>
+              <div className="grid max-h-[760px] grid-cols-1 gap-5 overflow-y-auto pr-2 md:grid-cols-2">
+                {visibleCatalogCards.map((card) => {
+                  const existing = usedCards.find((slot) => slot.card?.id === card.id);
+                  const count = existing?.count || 0;
+                  return (
+                    <div
+                      key={card.id}
+                      className="flex h-full min-h-[26rem] flex-col rounded-[1.5rem] border border-indigo-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md"
+                    >
+                      <div className="mx-auto w-full max-w-[12rem] overflow-hidden rounded-xl border border-indigo-200 bg-slate-50 shadow-sm">
+                        {card.imageUrl ? (
+                          <img
+                            src={card.imageUrl}
+                            alt={card.name}
+                            className="aspect-[2.5/3.35] w-full object-cover"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="aspect-[2.5/3.35] w-full bg-slate-200" />
+                        )}
+                      </div>
+                      <div className="mt-3 flex flex-1 flex-col">
+                        <div className="space-y-1">
+                          <p className="line-clamp-2 text-[1.35rem] font-semibold leading-snug text-gray-900">{card.name}</p>
+                          <p className="text-sm text-gray-500">{card.number}</p>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Badge className="rounded-xl bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-800">{card.type}</Badge>
+                          <Badge className="rounded-xl bg-yellow-100 px-2.5 py-1 text-xs font-semibold text-yellow-800">Cost {card.cost}</Badge>
+                        </div>
+                        <div className="mt-auto pt-3">
+                          <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-2.5 py-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => removeCardDirect(card.id)}
+                            className="h-8 min-w-8 rounded-xl px-0 text-sm font-bold bg-indigo-500 hover:bg-indigo-600 text-white"
+                            disabled={count <= 0}
+                          >
+                            -
+                          </Button>
+                          <div className="min-w-[2.75rem] rounded-xl bg-slate-900 px-2.5 py-1.5 text-center text-sm font-bold text-white">
+                            {count}
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => addCardDirect(card)}
+                            className="h-8 min-w-8 rounded-xl px-0 text-sm font-bold bg-indigo-500 hover:bg-indigo-600 text-white"
+                            disabled={count >= 4 || (!existing && usedCards.length >= SLOT_COUNT)}
+                          >
+                            +
+                          </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {hasMoreCatalogCards ? (
+                <div className="mt-4 flex justify-center">
+                  <Button
+                    type="button"
+                    onClick={() => setVisibleCatalogCount((current) => current + CATALOG_PAGE_SIZE)}
+                    className="rounded-xl bg-indigo-600 px-6 text-white hover:bg-indigo-700"
+                  >
+                    Load More
+                  </Button>
+                </div>
+              ) : null}
             </div>
 
             <div className="grid grid-cols-3 gap-3">
@@ -763,7 +1136,7 @@ export function CardActionIntelligence() {
           </div>
         </Card>
 
-        <Card className="lg:col-span-7 p-6 transition-all bg-gradient-to-br from-blue-50 to-cyan-50 border-2 border-blue-300">
+        <Card className="lg:col-span-7 p-5 transition-all bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-300">
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
@@ -772,27 +1145,17 @@ export function CardActionIntelligence() {
                 </div>
                 <div>
                   <h3 className="text-xl font-bold text-blue-900">AI Action Breakdown</h3>
-                  <p className="text-sm text-blue-700">Real backend AI explains the selected card and your current deck core.</p>
+                  <p className="text-sm text-blue-700">One clean AI flow for selected card, replacements, combos, and deck overview.</p>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  onClick={() => void runSelectedCardAiAnalysis()}
-                  disabled={loadingCardAI || !selectedCard}
-                  className="gap-2 bg-blue-600 hover:bg-blue-700 text-white"
-                >
-                  {loadingCardAI ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                  Card AI
-                </Button>
-                <Button
-                  onClick={() => void runDeckAiAnalysis()}
-                  disabled={loadingDeckAI || !selectedLeader || usedCards.length === 0}
-                  className="gap-2 bg-pink-600 hover:bg-pink-700 text-white"
-                >
-                  {loadingDeckAI ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
-                  Deck AI
-                </Button>
-              </div>
+              <Button
+                onClick={() => void runUnifiedCardAi()}
+                disabled={loadingCardAI || loadingUpgradeAI || loadingDeckAI || !selectedCard}
+                className="gap-2 bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {loadingCardAI || loadingUpgradeAI || loadingDeckAI ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                Card AI
+              </Button>
             </div>
 
             {!selectedCard ? (
@@ -804,28 +1167,80 @@ export function CardActionIntelligence() {
             ) : (
               <div className="space-y-4">
                 <div className="bg-white p-4 rounded-xl border-2 border-blue-300">
-                  <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex flex-wrap items-start gap-3">
+                    {selectedCard.imageUrl ? (
+                      <img
+                        src={selectedCard.imageUrl}
+                        alt={selectedCard.name}
+                        className="w-20 h-28 rounded-lg object-cover border-2 border-blue-200"
+                        loading="lazy"
+                      />
+                    ) : null}
+                    <div className="flex flex-wrap items-center gap-3">
                     <Badge className="bg-blue-100 text-blue-900">{selectedCard.name}</Badge>
                     <Badge className="bg-purple-100 text-purple-900">{selectedCard.type}</Badge>
                     <Badge className="bg-yellow-100 text-yellow-900">Cost {selectedCard.cost}</Badge>
                     {selectedCard.power ? <Badge className="bg-red-100 text-red-900">{selectedCard.power} Power</Badge> : null}
+                    </div>
                   </div>
                   <p className="text-sm text-gray-700 mt-3">{selectedCard.effect || "No effect text available from the cards API."}</p>
                 </div>
 
                 <div className="bg-white p-4 rounded-xl border-2 border-cyan-200 min-h-36">
-                  <p className="text-sm font-bold text-cyan-900 mb-2">AI Card Explanation</p>
+                  <p className="text-sm font-bold text-cyan-900 mb-2">Card AI Overview</p>
                   <p className="text-sm text-gray-800 whitespace-pre-line">
                     {cardAiAnswer || "Run Card AI to get a real explanation for when to play this card, what mistakes to avoid, and how it fits your current deck."}
                   </p>
                 </div>
+
+                <div className="bg-white p-4 rounded-xl border-2 border-violet-200 min-h-36">
+                  <p className="text-sm font-bold text-violet-900 mb-2">Replacement / Combo Summary</p>
+                  <p className="text-sm text-gray-800 whitespace-pre-line">
+                    {upgradeAiAnswer || "Card AI will also bring replacement direction, combo ideas, and player-fit summary here."}
+                  </p>
+                </div>
+
+                {cardIntelResult ? (
+                  <div className="grid gap-4">
+                    <div className="bg-white p-4 rounded-xl border-2 border-violet-200">
+                      <p className="text-sm font-bold text-violet-900 mb-3">Combo Partners</p>
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {comboPartnerCards.map((item) => (
+                          <SuggestedCardTile key={`combo-${item.card?.id}`} card={item.card!} reason={item.reason} />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="bg-white p-4 rounded-xl border-2 border-pink-200">
+                      <p className="text-sm font-bold text-pink-900 mb-3">Replacement Options</p>
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {replacementCards.map((item) => (
+                          <SuggestedCardTile key={`replacement-${item.card?.id}`} card={item.card!} reason={item.reason} />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="bg-white p-4 rounded-xl border-2 border-amber-200">
+                        <p className="text-sm font-bold text-amber-900 mb-2">Weak Spots</p>
+                        <div className="space-y-2">
+                          {(cardIntelResult.weakSpots || []).map((spot) => (
+                            <p key={spot} className="text-sm text-gray-800">{spot}</p>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="bg-white p-4 rounded-xl border-2 border-emerald-200">
+                        <p className="text-sm font-bold text-emerald-900 mb-2">Best For</p>
+                        <p className="text-sm text-gray-800">{cardIntelResult.bestFor}</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )}
 
             <div className="bg-white p-4 rounded-xl border-2 border-pink-200 min-h-40">
-              <p className="text-sm font-bold text-pink-900 mb-2">AI Deck Core Recommendation</p>
+              <p className="text-sm font-bold text-pink-900 mb-2">Deck AI Overview & Improvements</p>
               <p className="text-sm text-gray-800 whitespace-pre-line">
-                {deckAiAnswer || "Run Deck AI after selecting a leader and some cards. This answer will describe your game plan, weak spots, and what AI Coach should focus on next."}
+                {deckAiAnswer || "Card AI also brings deck overview here: current game plan, weak spots, and what to improve next."}
               </p>
             </div>
           </div>
@@ -882,6 +1297,30 @@ export function CardActionIntelligence() {
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function SuggestedCardTile({ card, reason }: { card: CardData; reason: string }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+      <div className="mb-3 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
+      {card.imageUrl ? (
+          <img src={card.imageUrl} alt={card.name} className="aspect-[2.5/3.5] w-full object-cover" loading="lazy" />
+      ) : (
+          <div className="aspect-[2.5/3.5] w-full bg-slate-200" />
+      )}
+      </div>
+      <div className="min-w-0">
+        <p className="font-semibold text-gray-900 line-clamp-2">{card.name}</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Badge className="bg-slate-900 text-white text-xs">{card.number}</Badge>
+          <Badge className="bg-blue-100 text-blue-800 text-xs">{card.type}</Badge>
+          <Badge className="bg-yellow-100 text-yellow-800 text-xs">Cost {card.cost}</Badge>
+          {card.color ? <Badge className="bg-purple-100 text-purple-800 text-xs">{card.color}</Badge> : null}
+        </div>
+        <p className="mt-3 text-sm leading-6 text-gray-700">{reason}</p>
+      </div>
     </div>
   );
 }

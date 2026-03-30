@@ -1,715 +1,687 @@
+import { useEffect, useMemo, useState } from "react";
+import { AlertCircle, Crown, GitCompare, Loader2, Sparkles, Swords, Trophy, User } from "lucide-react";
 import { Card } from "./ui/card";
 import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
-import { useState } from "react";
-import { GitCompare, TrendingUp, Zap, Target, Shield, Swords, Clock, Users, BarChart3, Activity, AlertCircle, CheckCircle, ArrowRight, Minus, Crown } from "lucide-react";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select";
-import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell } from "recharts";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { withApiBase } from "../data/apiBase";
 
-interface DeckData {
+type CompareCard = {
+  card_code: string;
+  name: string;
+  count: number;
+};
+
+type CompareDeck = {
+  id: string;
+  source: "saved" | "metaDeck" | "metaLeader";
+  name: string;
+  leaderName: string;
+  leaderCode: string;
+  color: string;
+  cards: CompareCard[];
+  deckSize: number;
+  baselineWinRate: number;
+  description: string;
+};
+
+type SavedDeckListItem = {
+  _id: string;
+  deck_name: string;
+  deck_size?: number;
+  leader?: {
+    card_code?: string;
+    name?: string;
+    color?: string;
+  };
+};
+
+type SavedDeckDetail = {
+  _id: string;
+  deck_name: string;
+  deck_size?: number;
+  leader?: {
+    card_code?: string;
+    name?: string;
+    color?: string;
+  };
+  deck_cards?: Array<{
+    card_code?: string;
+    count?: number;
+  }>;
+};
+
+type SavedDeckProfile = {
+  summary?: {
+    win_rate_estimate?: number;
+  };
+};
+
+type ApiDeckCard = {
+  code: string;
+  count: number;
+  name: string;
+};
+
+type ApiDeckEntry = {
+  deck_cards?: ApiDeckCard[];
+  games?: number;
+  winRate?: number;
+  wins?: number;
+  losses?: number;
+};
+
+type ApiLeaderDecklist = {
+  _id: string;
+  card_id: string;
+  leader?: string;
+  leader_name?: string;
+  setName?: string;
+  leaderWinRate?: number;
+  decklists?: ApiDeckEntry[];
+};
+
+type MetaLeaderSummary = {
   id: string;
   name: string;
-  leader: string;
+  number: string;
   color: string;
-  tier: "S" | "A" | "B" | "C";
   winRate: number;
-  popularity: number;
-  avgTurnsToWin: number;
-  consistency: number;
-  aggression: number;
-  control: number;
-  combo: number;
-  defense: number;
-  speed: number;
-  complexity: number;
-  earlyGame: number;
-  midGame: number;
-  lateGame: number;
-  avgCost: number;
-  characterCount: number;
-  eventCount: number;
-  stageCount: number;
-  strengths: string[];
-  weaknesses: string[];
-  playstyle: string;
-  topMatchups: { deck: string; winRate: number }[];
-}
+};
 
-const sampleDecks: DeckData[] = [
-  {
-    id: "1",
-    name: "Red Zoro Aggro",
-    leader: "Roronoa Zoro",
-    color: "Red",
-    tier: "S",
-    winRate: 58.3,
-    popularity: 15.2,
-    avgTurnsToWin: 6.5,
-    consistency: 85,
-    aggression: 95,
-    control: 40,
-    combo: 60,
-    defense: 45,
-    speed: 90,
-    complexity: 65,
-    earlyGame: 90,
-    midGame: 75,
-    lateGame: 50,
-    avgCost: 3.2,
-    characterCount: 42,
-    eventCount: 6,
-    stageCount: 2,
-    strengths: ["Early pressure", "Fast damage", "Board flooding"],
-    weaknesses: ["Weak to board wipes", "Runs out of resources", "Vulnerable late game"],
-    playstyle: "Hyper-aggressive beatdown that aims to win before turn 7",
-    topMatchups: [
-      { deck: "Blue Nami Control", winRate: 65 },
-      { deck: "Yellow Katakuri", winRate: 52 },
-      { deck: "Black Kaido", winRate: 45 }
-    ]
-  },
-  {
-    id: "2",
-    name: "Blue Nami Control",
-    leader: "Nami",
-    color: "Blue",
-    tier: "A",
-    winRate: 54.7,
-    popularity: 12.8,
-    avgTurnsToWin: 9.2,
-    consistency: 90,
-    aggression: 35,
-    control: 95,
-    combo: 50,
-    defense: 80,
-    speed: 40,
-    complexity: 85,
-    earlyGame: 60,
-    midGame: 85,
-    lateGame: 95,
-    avgCost: 4.1,
-    characterCount: 35,
-    eventCount: 12,
-    stageCount: 3,
-    strengths: ["Card advantage", "Removal options", "Late game power"],
-    weaknesses: ["Slow start", "Weak to aggro rush", "Requires skill"],
-    playstyle: "Controlling deck that wins through card advantage and late-game value",
-    topMatchups: [
-      { deck: "Yellow Katakuri", winRate: 62 },
-      { deck: "Black Kaido", winRate: 58 },
-      { deck: "Red Zoro Aggro", winRate: 35 }
-    ]
-  },
-  {
-    id: "3",
-    name: "Yellow Katakuri Trigger",
-    leader: "Charlotte Katakuri",
-    color: "Yellow",
-    tier: "A",
-    winRate: 56.1,
-    popularity: 18.5,
-    avgTurnsToWin: 8.0,
-    consistency: 75,
-    aggression: 60,
-    control: 70,
-    combo: 85,
-    defense: 75,
-    speed: 65,
-    complexity: 75,
-    earlyGame: 70,
-    midGame: 80,
-    lateGame: 70,
-    avgCost: 3.8,
-    characterCount: 38,
-    eventCount: 8,
-    stageCount: 4,
-    strengths: ["Trigger synergies", "Life manipulation", "Flexible gameplan"],
-    weaknesses: ["RNG dependent", "Inconsistent draws", "Medium power level"],
-    playstyle: "Mid-range deck leveraging trigger effects and life manipulation",
-    topMatchups: [
-      { deck: "Red Zoro Aggro", winRate: 48 },
-      { deck: "Blue Nami Control", winRate: 38 },
-      { deck: "Black Kaido", winRate: 55 }
-    ]
-  },
-  {
-    id: "4",
-    name: "Black Kaido Ramp",
-    leader: "Kaido",
-    color: "Black",
-    tier: "S",
-    winRate: 59.8,
-    popularity: 14.3,
-    avgTurnsToWin: 7.8,
-    consistency: 80,
-    aggression: 70,
-    control: 60,
-    combo: 55,
-    defense: 65,
-    speed: 70,
-    complexity: 70,
-    earlyGame: 50,
-    midGame: 85,
-    lateGame: 90,
-    avgCost: 4.5,
-    characterCount: 40,
-    eventCount: 7,
-    stageCount: 3,
-    strengths: ["Big threats", "DON advantage", "Powerful finishers"],
-    weaknesses: ["Slow early game", "Vulnerable to aggro", "High cost cards"],
-    playstyle: "Ramp strategy that deploys massive threats to overwhelm opponents",
-    topMatchups: [
-      { deck: "Blue Nami Control", winRate: 42 },
-      { deck: "Yellow Katakuri", winRate: 45 },
-      { deck: "Red Zoro Aggro", winRate: 55 }
-    ]
-  },
-  {
-    id: "5",
-    name: "Green Oden Tempo",
-    leader: "Kozuki Oden",
-    color: "Green",
-    tier: "B",
-    winRate: 51.2,
-    popularity: 8.7,
-    avgTurnsToWin: 8.5,
-    consistency: 70,
-    aggression: 55,
-    control: 55,
-    combo: 65,
-    defense: 60,
-    speed: 60,
-    complexity: 60,
-    earlyGame: 65,
-    midGame: 75,
-    lateGame: 60,
-    avgCost: 3.6,
-    characterCount: 41,
-    eventCount: 7,
-    stageCount: 2,
-    strengths: ["Tempo plays", "Flexible options", "Good removal"],
-    weaknesses: ["No clear win condition", "Average power level", "Inconsistent"],
-    playstyle: "Tempo-based strategy maintaining board presence while dealing damage",
-    topMatchups: [
-      { deck: "Yellow Katakuri", winRate: 53 },
-      { deck: "Red Zoro Aggro", winRate: 48 },
-      { deck: "Blue Nami Control", winRate: 46 }
-    ]
+type MetaLeaderDetail = {
+  leader: MetaLeaderSummary;
+  stats: {
+    winRate: number;
+  };
+  cards: Array<{
+    code: string;
+    name: string;
+    avgCopies: number;
+  }>;
+};
+
+type OptimizeResponse = {
+  deck_power?: { score?: number; tier?: string };
+  consistencyScore?: { score?: number };
+  synergyScore?: { score?: number };
+  metaFitScore?: { score?: number; estimatedWinPercent?: number };
+  weaknesses?: string[];
+  ai_summary?: string;
+};
+
+type CompareAiResponse = {
+  deckAWinPercent: number;
+  deckBWinPercent: number;
+  summary: string;
+  explanation?: string[];
+};
+
+type CompareOption = {
+  value: string;
+  label: string;
+  source: CompareDeck["source"];
+  subtitle: string;
+};
+
+const clamp = (value: number, min = 0, max = 100) => Math.max(min, Math.min(max, value));
+
+const parseNumber = (value: unknown, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+const buildDeckSize = (cards: CompareCard[]) => cards.reduce((sum, card) => sum + card.count, 0);
+
+const normalizeSavedCards = (cards: SavedDeckDetail["deck_cards"]): CompareCard[] =>
+  (Array.isArray(cards) ? cards : [])
+    .map((card) => ({
+      card_code: String(card?.card_code || "").trim(),
+      name: String(card?.card_code || "").trim(),
+      count: clamp(parseNumber(card?.count, 0), 0, 4),
+    }))
+    .filter((card) => card.card_code && card.count > 0);
+
+const getColorBadgeStyle = (color: string) => {
+  const normalized = color.toLowerCase();
+  if (normalized.includes("red")) return "bg-red-100 text-red-800 border-red-300";
+  if (normalized.includes("blue")) return "bg-blue-100 text-blue-800 border-blue-300";
+  if (normalized.includes("green")) return "bg-green-100 text-green-800 border-green-300";
+  if (normalized.includes("yellow")) return "bg-yellow-100 text-yellow-800 border-yellow-300";
+  if (normalized.includes("purple")) return "bg-purple-100 text-purple-800 border-purple-300";
+  if (normalized.includes("black")) return "bg-slate-200 text-slate-800 border-slate-400";
+  return "bg-gray-100 text-gray-800 border-gray-300";
+};
+
+const getSourceBadge = (source: CompareDeck["source"]) => {
+  if (source === "saved") return "bg-emerald-100 text-emerald-800";
+  if (source === "metaDeck") return "bg-blue-100 text-blue-800";
+  return "bg-purple-100 text-purple-800";
+};
+
+const fetchJson = async <T,>(path: string): Promise<T> => {
+  const response = await fetch(withApiBase(path));
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error((data as { message?: string }).message || `Request failed (${response.status})`);
   }
-];
+  return data as T;
+};
+
+const buildMetaDeckOptions = (leaders: ApiLeaderDecklist[]): CompareOption[] =>
+  leaders.flatMap((leader) =>
+    (Array.isArray(leader.decklists) ? leader.decklists : []).map((deck, index) => ({
+      value: `metaDeck:${leader._id}:${index}`,
+      label: `${leader.leader_name || leader.leader || leader.card_id} Deck ${index + 1}`,
+      source: "metaDeck" as const,
+      subtitle: `${leader.setName || "Tournament decklist"} • ${parseNumber(deck.winRate, 0).toFixed(1)}% WR`,
+    }))
+  );
+
+const buildSavedDeckOptions = (decks: SavedDeckListItem[]): CompareOption[] =>
+  decks.map((deck) => ({
+    value: `saved:${deck._id}`,
+    label: deck.deck_name,
+    source: "saved" as const,
+    subtitle: `${deck.leader?.name || deck.leader?.card_code || "Unknown Leader"} • ${deck.deck_size || 0} cards`,
+  }));
+
+const buildMetaLeaderOptions = (leaders: MetaLeaderSummary[]): CompareOption[] =>
+  leaders.map((leader) => ({
+    value: `metaLeader:${leader.number}`,
+    label: `${leader.name} Core`,
+    source: "metaLeader" as const,
+    subtitle: `${leader.color || "Unknown"} • ${leader.winRate.toFixed(1)}% WR`,
+  }));
 
 export function DeckCompare() {
-  const [deckA, setDeckA] = useState<DeckData | null>(null);
-  const [deckB, setDeckB] = useState<DeckData | null>(null);
+  const [savedDecks, setSavedDecks] = useState<SavedDeckListItem[]>([]);
+  const [metaDecklists, setMetaDecklists] = useState<ApiLeaderDecklist[]>([]);
+  const [metaLeaders, setMetaLeaders] = useState<MetaLeaderSummary[]>([]);
+  const [deckAValue, setDeckAValue] = useState("");
+  const [deckBValue, setDeckBValue] = useState("");
+  const [deckA, setDeckA] = useState<CompareDeck | null>(null);
+  const [deckB, setDeckB] = useState<CompareDeck | null>(null);
+  const [analysisA, setAnalysisA] = useState<OptimizeResponse | null>(null);
+  const [analysisB, setAnalysisB] = useState<OptimizeResponse | null>(null);
+  const [aiWinningChance, setAiWinningChance] = useState<CompareAiResponse | null>(null);
+  const [loadingSources, setLoadingSources] = useState(true);
+  const [loadingCompare, setLoadingCompare] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleDeckASelect = (deckId: string) => {
-    const deck = sampleDecks.find(d => d.id === deckId);
-    setDeckA(deck || null);
-  };
+  useEffect(() => {
+    let cancelled = false;
 
-  const handleDeckBSelect = (deckId: string) => {
-    const deck = sampleDecks.find(d => d.id === deckId);
-    setDeckB(deck || null);
-  };
+    const loadSources = async () => {
+      try {
+        setLoadingSources(true);
+        setError(null);
 
-  // Radar chart data
-  const getRadarData = () => {
-    if (!deckA || !deckB) return [];
-    return [
-      { stat: 'Aggression', deckA: deckA.aggression, deckB: deckB.aggression },
-      { stat: 'Control', deckA: deckA.control, deckB: deckB.control },
-      { stat: 'Speed', deckA: deckA.speed, deckB: deckB.speed },
-      { stat: 'Defense', deckA: deckA.defense, deckB: deckB.defense },
-      { stat: 'Combo', deckA: deckA.combo, deckB: deckB.combo },
-      { stat: 'Consistency', deckA: deckA.consistency, deckB: deckB.consistency }
-    ];
-  };
+        const [savedResponse, decklistResponse, metaResponse] = await Promise.all([
+          fetchJson<{ decks?: SavedDeckListItem[] }>("/decks?limit=50"),
+          fetchJson<{ decklists?: ApiLeaderDecklist[] }>("/decks/decklist?limit=40"),
+          fetchJson<{ leaders?: MetaLeaderSummary[] }>("/meta/leaders"),
+        ]);
 
-  // Game phase data
-  const getGamePhaseData = () => {
-    if (!deckA || !deckB) return [];
-    return [
-      { phase: 'Early', deckA: deckA.earlyGame, deckB: deckB.earlyGame },
-      { phase: 'Mid', deckA: deckA.midGame, deckB: deckB.midGame },
-      { phase: 'Late', deckA: deckA.lateGame, deckB: deckB.lateGame }
-    ];
-  };
+        if (cancelled) return;
+        setSavedDecks(Array.isArray(savedResponse.decks) ? savedResponse.decks : []);
+        setMetaDecklists(Array.isArray(decklistResponse.decklists) ? decklistResponse.decklists : []);
+        setMetaLeaders(Array.isArray(metaResponse.leaders) ? metaResponse.leaders : []);
+      } catch (fetchError) {
+        if (!cancelled) {
+          setError(fetchError instanceof Error ? fetchError.message : "Failed to load compare sources.");
+        }
+      } finally {
+        if (!cancelled) setLoadingSources(false);
+      }
+    };
 
-  const getTierColor = (tier: string) => {
-    switch (tier) {
-      case 'S': return 'bg-yellow-500 text-white';
-      case 'A': return 'bg-green-500 text-white';
-      case 'B': return 'bg-blue-500 text-white';
-      case 'C': return 'bg-gray-500 text-white';
-      default: return 'bg-gray-500 text-white';
+    void loadSources();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const options = useMemo(
+    () => [
+      ...buildSavedDeckOptions(savedDecks),
+      ...buildMetaDeckOptions(metaDecklists),
+      ...buildMetaLeaderOptions(metaLeaders),
+    ],
+    [savedDecks, metaDecklists, metaLeaders]
+  );
+
+  const resolveSelection = async (value: string): Promise<CompareDeck | null> => {
+    if (!value) return null;
+
+    if (value.startsWith("saved:")) {
+      const deckId = value.split(":")[1];
+      const [detail, profile] = await Promise.all([
+        fetchJson<SavedDeckDetail>(`/decks/${deckId}`),
+        fetchJson<SavedDeckProfile>(`/analytics/saved-deck-profile/${deckId}`),
+      ]);
+
+      const cards = normalizeSavedCards(detail.deck_cards);
+      return {
+        id: value,
+        source: "saved",
+        name: detail.deck_name,
+        leaderName: String(detail.leader?.name || detail.leader?.card_code || "Unknown Leader").trim(),
+        leaderCode: String(detail.leader?.card_code || "").trim(),
+        color: String(detail.leader?.color || "").trim(),
+        cards,
+        deckSize: detail.deck_size || buildDeckSize(cards),
+        baselineWinRate: parseNumber(profile.summary?.win_rate_estimate, 50),
+        description: "User saved deck from My Collection.",
+      };
     }
+
+    if (value.startsWith("metaDeck:")) {
+      const [, leaderId, deckIndexRaw] = value.split(":");
+      const deckIndex = parseNumber(deckIndexRaw, 0);
+      const leader = metaDecklists.find((entry) => entry._id === leaderId) || null;
+      const deck = leader?.decklists?.[deckIndex];
+      if (!leader || !deck) return null;
+
+      const cards = (Array.isArray(deck.deck_cards) ? deck.deck_cards : [])
+        .map((card) => ({
+          card_code: String(card.code || "").trim(),
+          name: String(card.name || card.code || "").trim(),
+          count: clamp(parseNumber(card.count, 0), 0, 4),
+        }))
+        .filter((card) => card.card_code && card.count > 0);
+
+      return {
+        id: value,
+        source: "metaDeck",
+        name: `${leader.leader_name || leader.leader || leader.card_id} Deck ${deckIndex + 1}`,
+        leaderName: String(leader.leader_name || leader.leader || leader.card_id || "").trim(),
+        leaderCode: String(leader.card_id || "").trim(),
+        color: "",
+        cards,
+        deckSize: buildDeckSize(cards),
+        baselineWinRate: parseNumber(deck.winRate ?? leader.leaderWinRate, 50),
+        description: `${leader.setName || "Tournament meta"} decklist with ${parseNumber(deck.games, 0)} tracked games.`,
+      };
+    }
+
+    if (value.startsWith("metaLeader:")) {
+      const leaderCode = value.split(":")[1];
+      const detail = await fetchJson<MetaLeaderDetail>(`/meta/leaders/${encodeURIComponent(leaderCode)}`);
+      const cards = (Array.isArray(detail.cards) ? detail.cards : [])
+        .map((card) => ({
+          card_code: String(card.code || "").trim(),
+          name: String(card.name || card.code || "").trim(),
+          count: clamp(Math.max(1, Math.round(parseNumber(card.avgCopies, 1))), 1, 4),
+        }))
+        .filter((card) => card.card_code && card.count > 0)
+        .slice(0, 15);
+
+      return {
+        id: value,
+        source: "metaLeader",
+        name: `${detail.leader.name} Meta Core`,
+        leaderName: detail.leader.name,
+        leaderCode: detail.leader.number,
+        color: detail.leader.color,
+        cards,
+        deckSize: buildDeckSize(cards),
+        baselineWinRate: parseNumber(detail.stats?.winRate, 50),
+        description: "Meta leader core built from live card presence data.",
+      };
+    }
+
+    return null;
   };
 
-  const getColorBadgeStyle = (color: string) => {
-    switch (color) {
-      case 'Red': return 'bg-red-100 text-red-800 border-red-300';
-      case 'Blue': return 'bg-blue-100 text-blue-800 border-blue-300';
-      case 'Green': return 'bg-green-100 text-green-800 border-green-300';
-      case 'Yellow': return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-      case 'Black': return 'bg-gray-100 text-gray-800 border-gray-300';
-      case 'Purple': return 'bg-purple-100 text-purple-800 border-purple-300';
-      default: return 'bg-gray-100 text-gray-800 border-gray-300';
+  useEffect(() => {
+    let cancelled = false;
+    if (!deckAValue) {
+      setDeckA(null);
+      return;
     }
+
+    const loadDeckA = async () => {
+      try {
+        const resolved = await resolveSelection(deckAValue);
+        if (!cancelled) setDeckA(resolved);
+      } catch (loadError) {
+        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Failed to load Deck A.");
+      }
+    };
+
+    void loadDeckA();
+    return () => {
+      cancelled = true;
+    };
+  }, [deckAValue, metaDecklists]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!deckBValue) {
+      setDeckB(null);
+      return;
+    }
+
+    const loadDeckB = async () => {
+      try {
+        const resolved = await resolveSelection(deckBValue);
+        if (!cancelled) setDeckB(resolved);
+      } catch (loadError) {
+        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Failed to load Deck B.");
+      }
+    };
+
+    void loadDeckB();
+    return () => {
+      cancelled = true;
+    };
+  }, [deckBValue, metaDecklists]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!deckA || !deckB) {
+      setAnalysisA(null);
+      setAnalysisB(null);
+      setAiWinningChance(null);
+      return;
+    }
+
+    const runCompare = async () => {
+      try {
+        setLoadingCompare(true);
+        setError(null);
+        setAiWinningChance(null);
+
+        const payloadA = {
+          leader: {
+            card_code: deckA.leaderCode,
+            name: deckA.leaderName,
+            color: deckA.color,
+          },
+          deck_cards: deckA.cards,
+          deck_size: deckA.deckSize,
+        };
+
+        const payloadB = {
+          leader: {
+            card_code: deckB.leaderCode,
+            name: deckB.leaderName,
+            color: deckB.color,
+          },
+          deck_cards: deckB.cards,
+          deck_size: deckB.deckSize,
+        };
+
+        const [resultA, resultB, compareAi] = await Promise.all([
+          fetch(withApiBase("/analytics/optimize"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payloadA),
+          }).then(async (response) => {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error((data as { message?: string }).message || "Deck A analysis failed.");
+            return data as OptimizeResponse;
+          }),
+          fetch(withApiBase("/analytics/optimize"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payloadB),
+          }).then(async (response) => {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error((data as { message?: string }).message || "Deck B analysis failed.");
+            return data as OptimizeResponse;
+          }),
+          fetch(withApiBase("/analytics/compare-decks-ai"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              deckA,
+              deckB,
+            }),
+          }).then(async (response) => {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error((data as { message?: string }).message || "AI winning chance failed.");
+            return data as CompareAiResponse;
+          }),
+        ]);
+
+        if (cancelled) return;
+        setAnalysisA(resultA);
+        setAnalysisB(resultB);
+        setAiWinningChance(compareAi);
+      } catch (compareError) {
+        if (!cancelled) {
+          setAiWinningChance(null);
+          setError(compareError instanceof Error ? compareError.message : "Failed to compare decks.");
+        }
+      } finally {
+        if (!cancelled) setLoadingCompare(false);
+      }
+    };
+
+    void runCompare();
+    return () => {
+      cancelled = true;
+    };
+  }, [deckA, deckB]);
+
+  const renderDeckPanel = (title: string, value: string, onChange: (value: string) => void, deck: CompareDeck | null, analysis: OptimizeResponse | null, accent: "blue" | "purple") => {
+    const accentClasses =
+      accent === "blue"
+        ? "from-blue-50 to-cyan-50 border-blue-300 text-blue-900"
+        : "from-purple-50 to-pink-50 border-purple-300 text-purple-900";
+
+    return (
+      <Card className={`p-6 border-2 bg-gradient-to-br ${accentClasses}`}>
+        <div className="space-y-4">
+          <h3 className="text-xl font-bold">{title}</h3>
+          <Select value={value} onValueChange={onChange} disabled={loadingSources}>
+            <SelectTrigger className="bg-white">
+              <SelectValue placeholder={loadingSources ? "Loading decks..." : `Choose ${title}`} />
+            </SelectTrigger>
+            <SelectContent>
+              {options.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label} - {option.subtitle}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {deck ? (
+            <div className="space-y-3 rounded-xl border border-white/70 bg-white p-4">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge className={getSourceBadge(deck.source)}>{deck.source}</Badge>
+                {deck.color ? <Badge className={`${getColorBadgeStyle(deck.color)} border`}>{deck.color}</Badge> : null}
+              </div>
+              <div>
+                <p className="text-lg font-bold text-gray-900">{deck.name}</p>
+                <p className="text-sm text-gray-600">Leader: {deck.leaderName} ({deck.leaderCode || "N/A"})</p>
+                <p className="text-sm text-gray-600">{deck.description}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-gray-500">Deck Size</p>
+                  <p className="text-xl font-bold text-gray-900">{deck.deckSize}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-gray-500">Baseline WR</p>
+                  <p className="text-xl font-bold text-gray-900">{deck.baselineWinRate.toFixed(1)}%</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-gray-500">AI Deck Power</p>
+                  <p className="text-xl font-bold text-gray-900">{parseNumber(analysis?.deck_power?.score, 0)}</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs text-gray-500">AI Meta Fit</p>
+                  <p className="text-xl font-bold text-gray-900">
+                    {parseNumber(analysis?.metaFitScore?.estimatedWinPercent ?? analysis?.metaFitScore?.score, 0)}%
+                  </p>
+                </div>
+              </div>
+              {Array.isArray(analysis?.weaknesses) && analysis?.weaknesses.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {analysis.weaknesses.slice(0, 4).map((weakness) => (
+                    <Badge key={weakness} className="bg-red-100 text-red-800">
+                      {weakness}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="rounded-xl border-2 border-dashed border-white/80 bg-white/70 p-8 text-center text-sm text-gray-600">
+              No deck selected
+            </div>
+          )}
+        </div>
+      </Card>
+    );
   };
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div className="space-y-4">
         <div className="flex items-center gap-3">
           <GitCompare className="w-8 h-8 text-purple-600" />
-          <h2 className="text-3xl font-bold text-gray-900">
-            ⚔️ Deck Compare
-          </h2>
+          <h2 className="text-3xl font-bold text-gray-900">Deck Compare</h2>
         </div>
         <p className="text-gray-900">
-          Side-by-side analysis using live meta data to compare deck strengths, weaknesses, and matchups
+          Compare user saved decks, tournament decklists, and meta leader core decks with AI-based winning chance analysis.
         </p>
       </div>
 
-      {/* Deck Selection */}
-      <div className="grid lg:grid-cols-2 gap-6">
-        {/* Deck A */}
-        <Card className="p-6 transition-all bg-gradient-to-br from-blue-50 to-cyan-50 border-2 border-blue-300">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xl font-bold text-blue-900">Deck A</h3>
-              {deckA && (
-                <Badge className={getTierColor(deckA.tier)}>
-                  Tier {deckA.tier}
-                </Badge>
-              )}
+      {error ? (
+        <Card className="border-2 border-red-300 bg-red-50 p-4">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 w-5 h-5 text-red-600" />
+            <div>
+              <p className="font-bold text-red-900">Deck Compare Error</p>
+              <p className="text-sm text-red-700">{error}</p>
             </div>
-
-            <Select onValueChange={handleDeckASelect}>
-              <SelectTrigger className="w-full border-blue-300 focus:ring-blue-500">
-                <SelectValue placeholder="Select deck A" />
-              </SelectTrigger>
-              <SelectContent>
-                {sampleDecks.map((deck) => (
-                  <SelectItem key={deck.id} value={deck.id}>
-                    {deck.name} - {deck.leader}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {deckA ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Badge className={`${getColorBadgeStyle(deckA.color)} border`}>
-                    {deckA.color}
-                  </Badge>
-                  <span className="text-sm text-gray-700">Leader: {deckA.leader}</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white p-3 rounded-lg border border-blue-200">
-                    <p className="text-xs text-gray-600 mb-1">Win Rate</p>
-                    <p className="text-lg font-bold text-blue-900">{deckA.winRate}%</p>
-                  </div>
-                  <div className="bg-white p-3 rounded-lg border border-blue-200">
-                    <p className="text-xs text-gray-600 mb-1">Popularity</p>
-                    <p className="text-lg font-bold text-blue-900">{deckA.popularity}%</p>
-                  </div>
-                  <div className="bg-white p-3 rounded-lg border border-blue-200">
-                    <p className="text-xs text-gray-600 mb-1">Avg Turn Win</p>
-                    <p className="text-lg font-bold text-blue-900">{deckA.avgTurnsToWin}</p>
-                  </div>
-                  <div className="bg-white p-3 rounded-lg border border-blue-200">
-                    <p className="text-xs text-gray-600 mb-1">Avg Cost</p>
-                    <p className="text-lg font-bold text-blue-900">{deckA.avgCost}</p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-white p-8 rounded-lg border-2 border-dashed border-blue-300 text-center">
-                <GitCompare className="w-12 h-12 text-blue-300 mx-auto mb-2" />
-                <p className="text-sm text-gray-500">No deck selected</p>
-              </div>
-            )}
           </div>
         </Card>
+      ) : null}
 
-        {/* Deck B */}
-        <Card className="p-6 transition-all bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-300">
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xl font-bold text-purple-900">Deck B</h3>
-              {deckB && (
-                <Badge className={getTierColor(deckB.tier)}>
-                  Tier {deckB.tier}
-                </Badge>
-              )}
-            </div>
+      <Card className="border-2 border-yellow-300 bg-gradient-to-br from-yellow-50 to-orange-50 p-5">
+        <div className="flex flex-wrap items-center gap-3 text-sm text-yellow-900">
+          <Badge className="bg-emerald-100 text-emerald-800">Saved Decks: {savedDecks.length}</Badge>
+          <Badge className="bg-blue-100 text-blue-800">Meta Decklists: {buildMetaDeckOptions(metaDecklists).length}</Badge>
+          <Badge className="bg-purple-100 text-purple-800">Meta Leaders: {metaLeaders.length}</Badge>
+        </div>
+      </Card>
 
-            <Select onValueChange={handleDeckBSelect}>
-              <SelectTrigger className="w-full border-purple-300 focus:ring-purple-500">
-                <SelectValue placeholder="Select deck B" />
-              </SelectTrigger>
-              <SelectContent>
-                {sampleDecks.map((deck) => (
-                  <SelectItem key={deck.id} value={deck.id}>
-                    {deck.name} - {deck.leader}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
-            {deckB ? (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <Badge className={`${getColorBadgeStyle(deckB.color)} border`}>
-                    {deckB.color}
-                  </Badge>
-                  <span className="text-sm text-gray-700">Leader: {deckB.leader}</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white p-3 rounded-lg border border-purple-200">
-                    <p className="text-xs text-gray-600 mb-1">Win Rate</p>
-                    <p className="text-lg font-bold text-purple-900">{deckB.winRate}%</p>
-                  </div>
-                  <div className="bg-white p-3 rounded-lg border border-purple-200">
-                    <p className="text-xs text-gray-600 mb-1">Popularity</p>
-                    <p className="text-lg font-bold text-purple-900">{deckB.popularity}%</p>
-                  </div>
-                  <div className="bg-white p-3 rounded-lg border border-purple-200">
-                    <p className="text-xs text-gray-600 mb-1">Avg Turn Win</p>
-                    <p className="text-lg font-bold text-purple-900">{deckB.avgTurnsToWin}</p>
-                  </div>
-                  <div className="bg-white p-3 rounded-lg border border-purple-200">
-                    <p className="text-xs text-gray-600 mb-1">Avg Cost</p>
-                    <p className="text-lg font-bold text-purple-900">{deckB.avgCost}</p>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-white p-8 rounded-lg border-2 border-dashed border-purple-300 text-center">
-                <GitCompare className="w-12 h-12 text-purple-300 mx-auto mb-2" />
-                <p className="text-sm text-gray-500">No deck selected</p>
-              </div>
-            )}
-          </div>
-        </Card>
+      <div className="grid gap-6 lg:grid-cols-2">
+        {renderDeckPanel("Deck A", deckAValue, setDeckAValue, deckA, analysisA, "blue")}
+        {renderDeckPanel("Deck B", deckBValue, setDeckBValue, deckB, analysisB, "purple")}
       </div>
 
-      {/* Key Metrics */}
-      <Card className="p-6 transition-all bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-300">
+      <Card className="border-2 border-green-300 bg-gradient-to-br from-green-50 to-emerald-50 p-6">
         <div className="space-y-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-green-500">
-              <BarChart3 className="w-5 h-5 text-white" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-green-500">
+              {loadingCompare ? <Loader2 className="w-5 h-5 animate-spin text-white" /> : <Swords className="w-5 h-5 text-white" />}
             </div>
             <div>
-              <h3 className="text-xl font-bold text-green-900">Key Metrics</h3>
-              <p className="text-sm text-green-700">Statistical comparison across all categories</p>
+              <h3 className="text-xl font-bold text-green-900">AI Winning Chance</h3>
+              <p className="text-sm text-green-700">Combined signal from optimize analytics, meta fit, consistency, and baseline win rate.</p>
             </div>
           </div>
 
           {!deckA || !deckB ? (
-            <div className="bg-white p-12 rounded-lg border-2 border-green-200 text-center">
-              <AlertCircle className="w-16 h-16 text-green-300 mx-auto mb-3" />
-              <p className="text-gray-700 text-lg">Select two decks to compare metrics</p>
-              <p className="text-gray-500 text-sm mt-2">Choose Deck A and Deck B above to see detailed comparison</p>
+            <div className="rounded-xl border-2 border-dashed border-green-300 bg-white p-10 text-center text-gray-600">
+              Select two decks to start compare analysis.
+            </div>
+          ) : loadingCompare ? (
+            <div className="rounded-xl border border-green-200 bg-white p-10 text-center">
+              <Loader2 className="mx-auto mb-3 w-8 h-8 animate-spin text-green-600" />
+              <p className="font-semibold text-green-900">AI compare analysis is running...</p>
             </div>
           ) : (
-            <div className="space-y-6">
-              {/* Radar Chart */}
-              <div className="bg-white p-4 rounded-xl border-2 border-green-200">
-                <p className="text-sm font-bold text-green-900 mb-3">PLAYSTYLE RADAR</p>
-                <ResponsiveContainer width="100%" height={300}>
-                  <RadarChart data={getRadarData()}>
-                    <PolarGrid />
-                    <PolarAngleAxis dataKey="stat" />
-                    <PolarRadiusAxis angle={90} domain={[0, 100]} />
-                    <Radar name={deckA.name} dataKey="deckA" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.5} />
-                    <Radar name={deckB.name} dataKey="deckB" stroke="#a855f7" fill="#a855f7" fillOpacity={0.5} />
-                    <Legend />
-                  </RadarChart>
-                </ResponsiveContainer>
+            <div className="space-y-5">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-xl border-2 border-blue-300 bg-white p-5 text-center">
+                  <p className="text-sm text-gray-500">{deckA.name}</p>
+                  <p className="mt-2 text-5xl font-bold text-blue-900">
+                    {typeof aiWinningChance?.deckAWinPercent === "number" ? `${aiWinningChance.deckAWinPercent}%` : "--"}
+                  </p>
+                  <p className="mt-2 text-sm text-blue-700">Estimated chance to come out ahead</p>
+                </div>
+                <div className="rounded-xl border-2 border-purple-300 bg-white p-5 text-center">
+                  <p className="text-sm text-gray-500">{deckB.name}</p>
+                  <p className="mt-2 text-5xl font-bold text-purple-900">
+                    {typeof aiWinningChance?.deckBWinPercent === "number" ? `${aiWinningChance.deckBWinPercent}%` : "--"}
+                  </p>
+                  <p className="mt-2 text-sm text-purple-700">Estimated chance to come out ahead</p>
+                </div>
               </div>
 
-              {/* Game Phase Comparison */}
-              <div className="bg-white p-4 rounded-xl border-2 border-green-200">
-                <p className="text-sm font-bold text-green-900 mb-3">GAME PHASE STRENGTH</p>
-                <ResponsiveContainer width="100%" height={250}>
-                  <BarChart data={getGamePhaseData()}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="phase" />
-                    <YAxis domain={[0, 100]} />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="deckA" name={deckA.name} fill="#3b82f6" />
-                    <Bar dataKey="deckB" name={deckB.name} fill="#a855f7" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Side-by-Side Stats */}
-              <div className="grid md:grid-cols-3 gap-4">
-                <div className="bg-white p-4 rounded-xl border-2 border-blue-300">
-                  <div className="text-center mb-3">
-                    <p className="text-xs font-bold text-gray-600">Win Rate</p>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-blue-900">{deckA.winRate}%</p>
-                      <p className="text-xs text-gray-600">{deckA.name}</p>
-                    </div>
-                    <ArrowRight className="w-5 h-5 text-gray-400" />
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-purple-900">{deckB.winRate}%</p>
-                      <p className="text-xs text-gray-600">{deckB.name}</p>
-                    </div>
-                  </div>
-                  {deckA.winRate > deckB.winRate ? (
-                    <Badge className="w-full mt-2 bg-blue-100 text-blue-800 justify-center">
-                      {deckA.name} +{(deckA.winRate - deckB.winRate).toFixed(1)}%
-                    </Badge>
-                  ) : deckA.winRate < deckB.winRate ? (
-                    <Badge className="w-full mt-2 bg-purple-100 text-purple-800 justify-center">
-                      {deckB.name} +{(deckB.winRate - deckA.winRate).toFixed(1)}%
-                    </Badge>
-                  ) : (
-                    <Badge className="w-full mt-2 bg-gray-100 text-gray-800 justify-center">
-                      Equal
-                    </Badge>
-                  )}
+              <div className="rounded-xl border border-green-200 bg-white p-4">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-green-600" />
+                  <p className="font-semibold text-green-900">AI Verdict</p>
                 </div>
-
-                <div className="bg-white p-4 rounded-xl border-2 border-blue-300">
-                  <div className="text-center mb-3">
-                    <p className="text-xs font-bold text-gray-600">Popularity</p>
+                <p className="mt-2 text-sm text-gray-700">
+                  {aiWinningChance?.summary || "AI winning chance abhi return nahi hua. Backend restart karke ya AI provider keys check karke dobara try karo."}
+                </p>
+                {Array.isArray(aiWinningChance?.explanation) && aiWinningChance!.explanation.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {aiWinningChance!.explanation.map((item) => (
+                      <Badge key={item} className="bg-emerald-100 text-emerald-800">
+                        {item}
+                      </Badge>
+                    ))}
                   </div>
-                  <div className="flex items-center justify-between">
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-blue-900">{deckA.popularity}%</p>
-                      <p className="text-xs text-gray-600">{deckA.name}</p>
+                ) : null}
+                {analysisA?.ai_summary || analysisB?.ai_summary ? (
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-lg bg-blue-50 p-3">
+                      <p className="text-xs font-bold text-blue-900">Deck A Summary</p>
+                      <p className="mt-1 text-sm text-blue-800">{analysisA?.ai_summary || "No AI summary returned."}</p>
                     </div>
-                    <ArrowRight className="w-5 h-5 text-gray-400" />
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-purple-900">{deckB.popularity}%</p>
-                      <p className="text-xs text-gray-600">{deckB.name}</p>
-                    </div>
-                  </div>
-                  {deckA.popularity > deckB.popularity ? (
-                    <Badge className="w-full mt-2 bg-blue-100 text-blue-800 justify-center">
-                      {deckA.name} +{(deckA.popularity - deckB.popularity).toFixed(1)}%
-                    </Badge>
-                  ) : deckA.popularity < deckB.popularity ? (
-                    <Badge className="w-full mt-2 bg-purple-100 text-purple-800 justify-center">
-                      {deckB.name} +{(deckB.popularity - deckA.popularity).toFixed(1)}%
-                    </Badge>
-                  ) : (
-                    <Badge className="w-full mt-2 bg-gray-100 text-gray-800 justify-center">
-                      Equal
-                    </Badge>
-                  )}
-                </div>
-
-                <div className="bg-white p-4 rounded-xl border-2 border-blue-300">
-                  <div className="text-center mb-3">
-                    <p className="text-xs font-bold text-gray-600">Speed (Avg Turns)</p>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-blue-900">{deckA.avgTurnsToWin}</p>
-                      <p className="text-xs text-gray-600">{deckA.name}</p>
-                    </div>
-                    <ArrowRight className="w-5 h-5 text-gray-400" />
-                    <div className="text-center">
-                      <p className="text-2xl font-bold text-purple-900">{deckB.avgTurnsToWin}</p>
-                      <p className="text-xs text-gray-600">{deckB.name}</p>
+                    <div className="rounded-lg bg-purple-50 p-3">
+                      <p className="text-xs font-bold text-purple-900">Deck B Summary</p>
+                      <p className="mt-1 text-sm text-purple-800">{analysisB?.ai_summary || "No AI summary returned."}</p>
                     </div>
                   </div>
-                  {deckA.avgTurnsToWin < deckB.avgTurnsToWin ? (
-                    <Badge className="w-full mt-2 bg-blue-100 text-blue-800 justify-center">
-                      {deckA.name} Faster
-                    </Badge>
-                  ) : deckA.avgTurnsToWin > deckB.avgTurnsToWin ? (
-                    <Badge className="w-full mt-2 bg-purple-100 text-purple-800 justify-center">
-                      {deckB.name} Faster
-                    </Badge>
-                  ) : (
-                    <Badge className="w-full mt-2 bg-gray-100 text-gray-800 justify-center">
-                      Equal Speed
-                    </Badge>
-                  )}
-                </div>
+                ) : null}
               </div>
             </div>
           )}
         </div>
       </Card>
 
-      {/* Playstyle Profile */}
-      {deckA && deckB && (
-        <Card className="p-6 transition-all bg-gradient-to-br from-orange-50 to-amber-50 border-2 border-orange-300">
-          <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-orange-500">
-                <Target className="w-5 h-5 text-white" />
+      <Card className="border-2 border-slate-300 bg-gradient-to-br from-slate-50 to-gray-100 p-6">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <Trophy className="w-6 h-6 text-slate-700" />
+            <h3 className="text-xl font-bold text-slate-900">Compare Sources</h3>
+          </div>
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="rounded-xl border border-emerald-200 bg-white p-4">
+              <div className="flex items-center gap-2">
+                <User className="w-4 h-4 text-emerald-600" />
+                <p className="font-semibold text-emerald-900">Saved Decks</p>
               </div>
-              <div>
-                <h3 className="text-xl font-bold text-orange-900">Playstyle Profile</h3>
-                <p className="text-sm text-orange-700">Strategic analysis and gameplay comparison</p>
-              </div>
+              <p className="mt-2 text-sm text-gray-700">Decks created by the user and saved in backend collection.</p>
             </div>
-
-            <div className="grid lg:grid-cols-2 gap-6">
-              {/* Deck A Profile */}
-              <div className="space-y-4">
-                <div className="bg-white p-4 rounded-xl border-2 border-blue-300">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Crown className="w-5 h-5 text-blue-600" />
-                    <h4 className="font-bold text-blue-900">{deckA.name}</h4>
-                  </div>
-                  <p className="text-sm text-gray-700 mb-3">{deckA.playstyle}</p>
-
-                  <div className="space-y-2">
-                    <div>
-                      <p className="text-xs font-bold text-green-900 mb-1">STRENGTHS</p>
-                      <div className="flex flex-wrap gap-2">
-                        {deckA.strengths.map((strength, idx) => (
-                          <Badge key={idx} className="bg-green-100 text-green-800 border border-green-300">
-                            <CheckCircle className="w-3 h-3 mr-1" />
-                            {strength}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <p className="text-xs font-bold text-red-900 mb-1">WEAKNESSES</p>
-                      <div className="flex flex-wrap gap-2">
-                        {deckA.weaknesses.map((weakness, idx) => (
-                          <Badge key={idx} className="bg-red-100 text-red-800 border border-red-300">
-                            <AlertCircle className="w-3 h-3 mr-1" />
-                            {weakness}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <p className="text-xs font-bold text-blue-900 mb-1">DECK COMPOSITION</p>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div className="bg-blue-50 p-2 rounded text-center border border-blue-200">
-                          <p className="text-lg font-bold text-blue-900">{deckA.characterCount}</p>
-                          <p className="text-xs text-gray-600">Characters</p>
-                        </div>
-                        <div className="bg-purple-50 p-2 rounded text-center border border-purple-200">
-                          <p className="text-lg font-bold text-purple-900">{deckA.eventCount}</p>
-                          <p className="text-xs text-gray-600">Events</p>
-                        </div>
-                        <div className="bg-green-50 p-2 rounded text-center border border-green-200">
-                          <p className="text-lg font-bold text-green-900">{deckA.stageCount}</p>
-                          <p className="text-xs text-gray-600">Stages</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-white p-4 rounded-xl border-2 border-blue-300">
-                  <p className="text-xs font-bold text-blue-900 mb-2">TOP MATCHUPS</p>
-                  <div className="space-y-2">
-                    {deckA.topMatchups.map((matchup, idx) => (
-                      <div key={idx} className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700">{matchup.deck}</span>
-                        <Badge className={matchup.winRate >= 50 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>
-                          {matchup.winRate}%
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+            <div className="rounded-xl border border-blue-200 bg-white p-4">
+              <div className="flex items-center gap-2">
+                <GitCompare className="w-4 h-4 text-blue-600" />
+                <p className="font-semibold text-blue-900">Meta Decklists</p>
               </div>
-
-              {/* Deck B Profile */}
-              <div className="space-y-4">
-                <div className="bg-white p-4 rounded-xl border-2 border-purple-300">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Crown className="w-5 h-5 text-purple-600" />
-                    <h4 className="font-bold text-purple-900">{deckB.name}</h4>
-                  </div>
-                  <p className="text-sm text-gray-700 mb-3">{deckB.playstyle}</p>
-
-                  <div className="space-y-2">
-                    <div>
-                      <p className="text-xs font-bold text-green-900 mb-1">STRENGTHS</p>
-                      <div className="flex flex-wrap gap-2">
-                        {deckB.strengths.map((strength, idx) => (
-                          <Badge key={idx} className="bg-green-100 text-green-800 border border-green-300">
-                            <CheckCircle className="w-3 h-3 mr-1" />
-                            {strength}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <p className="text-xs font-bold text-red-900 mb-1">WEAKNESSES</p>
-                      <div className="flex flex-wrap gap-2">
-                        {deckB.weaknesses.map((weakness, idx) => (
-                          <Badge key={idx} className="bg-red-100 text-red-800 border border-red-300">
-                            <AlertCircle className="w-3 h-3 mr-1" />
-                            {weakness}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <p className="text-xs font-bold text-purple-900 mb-1">DECK COMPOSITION</p>
-                      <div className="grid grid-cols-3 gap-2">
-                        <div className="bg-blue-50 p-2 rounded text-center border border-blue-200">
-                          <p className="text-lg font-bold text-blue-900">{deckB.characterCount}</p>
-                          <p className="text-xs text-gray-600">Characters</p>
-                        </div>
-                        <div className="bg-purple-50 p-2 rounded text-center border border-purple-200">
-                          <p className="text-lg font-bold text-purple-900">{deckB.eventCount}</p>
-                          <p className="text-xs text-gray-600">Events</p>
-                        </div>
-                        <div className="bg-green-50 p-2 rounded text-center border border-green-200">
-                          <p className="text-lg font-bold text-green-900">{deckB.stageCount}</p>
-                          <p className="text-xs text-gray-600">Stages</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-white p-4 rounded-xl border-2 border-purple-300">
-                  <p className="text-xs font-bold text-purple-900 mb-2">TOP MATCHUPS</p>
-                  <div className="space-y-2">
-                    {deckB.topMatchups.map((matchup, idx) => (
-                      <div key={idx} className="flex items-center justify-between">
-                        <span className="text-sm text-gray-700">{matchup.deck}</span>
-                        <Badge className={matchup.winRate >= 50 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>
-                          {matchup.winRate}%
-                        </Badge>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+              <p className="mt-2 text-sm text-gray-700">Tournament-style decklists fetched from backend decklist API.</p>
+            </div>
+            <div className="rounded-xl border border-purple-200 bg-white p-4">
+              <div className="flex items-center gap-2">
+                <Crown className="w-4 h-4 text-purple-600" />
+                <p className="font-semibold text-purple-900">Meta Leader Deck</p>
               </div>
+              <p className="mt-2 text-sm text-gray-700">Leader-level meta core generated from `meta leader` card presence data.</p>
             </div>
           </div>
-        </Card>
-      )}
+        </div>
+      </Card>
     </div>
   );
 }

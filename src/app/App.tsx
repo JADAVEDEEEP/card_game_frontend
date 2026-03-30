@@ -41,6 +41,7 @@ import { DeckFinder } from "./components/DeckFinder";
 import { DecisionLogic } from "./components/DecisionLogic";
 import { DecisionTables } from "./components/DecisionTables";
 import { DonSystem } from "./components/DonSystem";
+import { Events } from "./components/Events";
 import { GameBasics } from "./components/GameBasics";
 import { GameEndConditions } from "./components/GameEndConditions";
 import { GameZones } from "./components/GameZones";
@@ -65,7 +66,7 @@ import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "./components/ui/sheet";
 
-type Section = "splash" | "toc" | "basics" | "gameendconditions" | "donsystem" | "gamezones" | "phases" | "cardmastery" | "cards" | "combat" | "priority" | "scenarios" | "decisions" | "cheatsheet" | "prosystem" | "masterpiecemoves" | "colorexecution" | "deckcompare" | "decisionlogic" | "mycollection" | "cardaction" | "progress" | "datasync" | "tournamentimport" | "aicoach" | "metadecks" | "bestdecklists" | "metasnapshot" | "trainingplaylist" | "deckfinder" | "matchupoptimizer" | "metacounterbuilder" | "consistencyanalyzer" | "aiverdict" | "settings";
+type Section = "splash" | "toc" | "basics" | "gameendconditions" | "donsystem" | "gamezones" | "phases" | "cardmastery" | "cards" | "combat" | "priority" | "scenarios" | "decisions" | "cheatsheet" | "prosystem" | "masterpiecemoves" | "colorexecution" | "deckcompare" | "decisionlogic" | "mycollection" | "cardaction" | "events" | "progress" | "datasync" | "tournamentimport" | "aicoach" | "metadecks" | "bestdecklists" | "metasnapshot" | "trainingplaylist" | "deckfinder" | "matchupoptimizer" | "metacounterbuilder" | "consistencyanalyzer" | "aiverdict" | "settings";
 
 type LearningMode = "study" | "reference" | "drill";
 
@@ -106,6 +107,7 @@ export default function App() {
       decisionlogic: "Decision Logic",
       mycollection: "My Collection",
       cardaction: "Card Action Intelligence",
+      events: "Events",
       progress: "Progress",
       datasync: "Data Sync",
       tournamentimport: "Tournament Import",
@@ -168,6 +170,8 @@ export default function App() {
         return <MyCollection />;
       case "cardaction":
         return <CardActionIntelligence />;
+      case "events":
+        return <Events />;
       case "progress":
         return <Progress />;
       case "datasync":
@@ -380,6 +384,7 @@ export default function App() {
             { id: 'deckcompare', icon: GitCompare, label: 'Deck Compare' },
             { id: 'mycollection', icon: BookMarked, label: 'My Collection' },
             { id: 'cardaction', icon: Zap, label: 'Card Action Intelligence' },
+            { id: 'events', icon: TrendingUp, label: 'Events' },
             { id: 'tournamentimport', icon: FileText, label: 'Tournament Import' },
             { id: 'aicoach', icon: Sparkles, label: 'AI Coach' },
             { id: 'metadecks', icon: Layers, label: 'Meta Decks' },

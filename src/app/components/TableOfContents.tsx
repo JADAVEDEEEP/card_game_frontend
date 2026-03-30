@@ -161,6 +161,13 @@ const limitlessSections = [
     title: "Training Playlist",
     description: "7-day practice plan",
     color: "from-green-600 to-green-800"
+  },
+  {
+    id: "events",
+    icon: TrendingUp,
+    title: "Events",
+    description: "Watcher feed and email alerts",
+    color: "from-amber-600 to-orange-800"
   }
 ];
 
