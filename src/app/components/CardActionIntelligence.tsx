@@ -972,7 +972,7 @@ export function CardActionIntelligence() {
       </Card>
 
       <div className="grid lg:grid-cols-12 gap-5">
-        <Card className="lg:col-span-5 p-5 transition-all bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-300">
+        <Card className="lg:col-span-6 p-5 transition-all bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-300">
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-indigo-500">
@@ -1046,16 +1046,16 @@ export function CardActionIntelligence() {
                 <p className="text-sm font-bold text-indigo-900">Card Catalog</p>
                 <Badge className="bg-slate-100 text-slate-800">{nonLeaderCards.length} cards</Badge>
               </div>
-              <div className="grid max-h-[760px] grid-cols-1 gap-5 overflow-y-auto pr-2 md:grid-cols-2">
+              <div className="grid max-h-[760px] grid-cols-2 gap-4 overflow-y-auto pr-2">
                 {visibleCatalogCards.map((card) => {
                   const existing = usedCards.find((slot) => slot.card?.id === card.id);
                   const count = existing?.count || 0;
                   return (
                     <div
                       key={card.id}
-                      className="flex h-full min-h-[26rem] flex-col rounded-[1.5rem] border border-indigo-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md"
+                      className="flex flex-col rounded-[1.35rem] border border-indigo-200 bg-white px-3 py-4 shadow-sm transition-shadow hover:shadow-md"
                     >
-                      <div className="mx-auto w-full max-w-[12rem] overflow-hidden rounded-xl border border-indigo-200 bg-slate-50 shadow-sm">
+                      <div className="mx-auto w-full max-w-[10.5rem] overflow-hidden rounded-xl border border-indigo-200 bg-slate-50 shadow-sm">
                         {card.imageUrl ? (
                           <img
                             src={card.imageUrl}
@@ -1067,34 +1067,39 @@ export function CardActionIntelligence() {
                           <div className="aspect-[2.5/3.35] w-full bg-slate-200" />
                         )}
                       </div>
-                      <div className="mt-3 flex flex-1 flex-col">
-                        <div className="space-y-1">
-                          <p className="line-clamp-2 text-[1.35rem] font-semibold leading-snug text-gray-900">{card.name}</p>
-                          <p className="text-sm text-gray-500">{card.number}</p>
+                      <div className="mt-4 flex flex-col">
+                        <div className="space-y-1 px-1 text-left">
+                          <p className="line-clamp-2 text-[0.96rem] font-semibold leading-tight text-gray-900">{card.name}</p>
+                          <p className="text-[0.82rem] text-gray-500">{card.number}</p>
                         </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Badge className="rounded-xl bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-800">{card.type}</Badge>
-                          <Badge className="rounded-xl bg-yellow-100 px-2.5 py-1 text-xs font-semibold text-yellow-800">Cost {card.cost}</Badge>
+                        <div className="mt-4 flex flex-wrap gap-2 px-1">
+                          <Badge className="rounded-full bg-blue-100 px-3 py-1 text-[0.72rem] font-semibold text-blue-800">{card.type}</Badge>
+                          <Badge className="rounded-full bg-yellow-100 px-3 py-1 text-[0.72rem] font-semibold text-yellow-800">Cost {card.cost}</Badge>
+                          {card.color ? (
+                            <Badge className="rounded-full bg-slate-100 px-3 py-1 text-[0.72rem] font-semibold text-slate-800">
+                              {card.color}
+                            </Badge>
+                          ) : null}
                         </div>
-                        <div className="mt-auto pt-3">
-                          <div className="flex items-center justify-between rounded-2xl bg-slate-50 px-2.5 py-2">
+                        <div className="mt-5 px-1">
+                          <div className="flex w-full items-center justify-center gap-1.5 rounded-[1.05rem] bg-slate-100 p-1.5">
                           <Button
                             type="button"
                             size="sm"
                             onClick={() => removeCardDirect(card.id)}
-                            className="h-8 min-w-8 rounded-xl px-0 text-sm font-bold bg-indigo-500 hover:bg-indigo-600 text-white"
+                            className="h-8 min-w-8 rounded-xl px-0 text-sm font-bold bg-indigo-300 hover:bg-indigo-400 text-white shadow-none"
                             disabled={count <= 0}
                           >
                             -
                           </Button>
-                          <div className="min-w-[2.75rem] rounded-xl bg-slate-900 px-2.5 py-1.5 text-center text-sm font-bold text-white">
+                          <div className="min-w-[2.9rem] rounded-xl bg-slate-900 px-2.5 py-1.5 text-center text-sm font-bold text-white">
                             {count}
                           </div>
                           <Button
                             type="button"
                             size="sm"
                             onClick={() => addCardDirect(card)}
-                            className="h-8 min-w-8 rounded-xl px-0 text-sm font-bold bg-indigo-500 hover:bg-indigo-600 text-white"
+                            className="h-8 min-w-8 rounded-xl px-0 text-sm font-bold bg-indigo-500 hover:bg-indigo-600 text-white shadow-none"
                             disabled={count >= 4 || (!existing && usedCards.length >= SLOT_COUNT)}
                           >
                             +
@@ -1136,7 +1141,7 @@ export function CardActionIntelligence() {
           </div>
         </Card>
 
-        <Card className="lg:col-span-7 p-5 transition-all bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-300">
+        <Card className="lg:col-span-6 p-5 transition-all bg-gradient-to-br from-blue-50 to-cyan-50 border border-blue-300">
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
