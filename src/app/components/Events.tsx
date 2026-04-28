@@ -1,357 +1,367 @@
-import { useEffect, useMemo, useState } from "react";
-import {
-  Activity,
-  AlertCircle,
-  Clock,
-  Hash,
-  Mail,
-  RefreshCw,
-  Siren,
-  Timer,
-} from "lucide-react";
-import { Card } from "./ui/card";
-import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
+import { motion } from "framer-motion";
 import { withApiBase } from "../data/apiBase";
 
-type WatcherStatus = {
-  running: boolean;
-  last_run_at: string | null;
-  last_error: string | null;
-  last_new_count: number;
-  source_url: string;
-  interval_ms: number;
-  last_email_sent_at?: string | null;
-  last_email_error?: string | null;
-  last_email_reason?: string | null;
-};
+/* ─── Types ─────────────────────────────────────────────────────── */
+type CategoryTab =
+  | "ALL" | "NEWS" | "PRODUCTS" | "EVENTS"
+  | "RULES" | "CARDS" | "MAGAZINE" | "STREAM";
 
-type WatchedEvent = {
+type EventItem = {
   url: string;
   title: string;
-  published_at: string;
-  summary: string;
-  first_seen_at: string | null;
-  last_notified_at: string | null;
+  published_at?: string;
+  summary?: string;
+  category?: string;
 };
 
-type WatcherActionResponse = {
-  message?: string;
-  status?: WatcherStatus;
-  error?: string;
-};
+const TABS: CategoryTab[] = [
+  "ALL", "NEWS", "PRODUCTS", "EVENTS",
+  "RULES", "CARDS", "MAGAZINE", "STREAM",
+];
 
+/* ─── Date helpers ──────────────────────────────────────────────── */
 const DATE_PATTERN =
   /\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},\s+\d{4}\b/i;
-
-const formatTimestamp = (raw: string | null | undefined): string => {
-  if (!raw) return "N/A";
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) return String(raw);
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+const RANGE_PATTERN =
+  /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2})\s*[-–]\s*\d{1,2},\s*(20\d{2})\b/i;
+const MONTH_PATTERN =
+  /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b/i;
+const MONTH_INDEX: Record<string, number> = {
+  jan:0,january:0,feb:1,february:1,mar:2,march:2,apr:3,april:3,may:4,
+  jun:5,june:5,jul:6,july:6,aug:7,august:7,sep:8,sept:8,september:8,
+  oct:9,october:9,nov:10,november:10,dec:11,december:11,
 };
 
-const extractDisplayDate = (event: WatchedEvent) => {
-  const direct = String(event.published_at || "").trim();
-  if (direct) return direct;
-  const match = `${event.title || ""} ${event.summary || ""}`.match(DATE_PATTERN);
-  return match ? match[0] : "";
+const normalizeSpace = (v: string) => String(v || "").replace(/\s+/g, " ").trim();
+
+const extractDeclaredDate = (value: string): string => {
+  const raw = normalizeSpace(value);
+  if (!raw) return "";
+  const exact = raw.match(DATE_PATTERN);
+  if (exact) return exact[0];
+  const ranged = raw.match(RANGE_PATTERN);
+  if (ranged) return `${ranged[1]} ${ranged[2]}, ${ranged[3]}`;
+  const ts = Date.parse(raw);
+  if (Number.isFinite(ts))
+    return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return "";
 };
 
-const getTag = (title: string) => {
-  const upper = title.toUpperCase();
-  if (upper.includes("COMPETITIVE")) return "COMPETITIVE";
-  if (upper.includes("CARD LIST")) return "CARD LIST";
-  if (upper.includes("OTHER")) return "OTHER";
-  return "UPDATE";
+const parseDateForSort = (value: string): number => {
+  const raw = normalizeSpace(value);
+  if (!raw) return 0;
+  const declared = extractDeclaredDate(raw);
+  if (declared) { const ts = Date.parse(declared); if (Number.isFinite(ts)) return ts; }
+  const yearMatch = raw.match(/\b(20\d{2})\b/);
+  const monthMatch = raw.match(MONTH_PATTERN);
+  if (!yearMatch || !monthMatch) return 0;
+  const month = MONTH_INDEX[monthMatch[1].toLowerCase()];
+  if (month === undefined) return 0;
+  const after = raw.slice((monthMatch.index || 0) + monthMatch[0].length);
+  const dayMatch = after.match(/\b(\d{1,2})\b/);
+  return Date.UTC(Number(yearMatch[1]), month, dayMatch ? Number(dayMatch[1]) : 1);
 };
 
-const getTagClassName = (tag: string) => {
-  if (tag === "COMPETITIVE") return "bg-blue-100 text-blue-800 border-blue-300";
-  if (tag === "CARD LIST") return "bg-emerald-100 text-emerald-800 border-emerald-300";
-  if (tag === "OTHER") return "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300";
-  return "bg-slate-100 text-slate-700 border-slate-300";
+/* ─── Category logic ────────────────────────────────────────────── */
+const inferCategory = (event: EventItem): CategoryTab => {
+  const c = normalizeSpace(event.category || "").toUpperCase();
+  const u = normalizeSpace(event.url || "").toLowerCase();
+  const t = `${event.title || ""} ${event.summary || ""}`.toLowerCase();
+  if (c.includes("NEWS") || u.includes("/news/")) return "NEWS";
+  if (c.includes("PRODUCT") || u.includes("/products/")) return "PRODUCTS";
+  if (c.includes("RULE") || u.includes("/rules/")) return "RULES";
+  if (c.includes("CARD") || u.includes("/cards/")) return "CARDS";
+  if (c.includes("MAGAZINE") || u.includes("/magazine/") || t.includes("magazine")) return "MAGAZINE";
+  if (c.includes("STREAM") || u.includes("/stream/") || t.includes("stream")) return "STREAM";
+  if (c.includes("EVENT") || u.includes("/events/")) return "EVENTS";
+  return "NEWS";
 };
 
-const cleanTitle = (title: string) =>
-  title.replace(/\.\s*(COMPETITIVE|OTHER|CARD LIST)[^.]*$/i, "").trim();
+/* ─── Color maps ─────────────────────────────────────────────────── */
+const ACCENT_COLOR: Record<string, string> = {
+  NEWS: "#64748b", PRODUCTS: "#ef4444", EVENTS: "#f97316",
+  RULES: "#3b82f6", CARDS: "#10b981", MAGAZINE: "#8b5cf6", STREAM: "#ec4899",
+};
+const CAT_TEXT: Record<string, string> = {
+  NEWS: "#94a3b8", PRODUCTS: "#f87171", EVENTS: "#fb923c",
+  RULES: "#60a5fa", CARDS: "#34d399", MAGAZINE: "#a78bfa", STREAM: "#f472b6",
+};
 
+/* ─── CSS injected once ─────────────────────────────────────────── */
+const GLOBAL_CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&display=swap');
+
+/* Animation 1 — Pulse Ring Glow */
+@keyframes pulseRing {
+  0%,100% { box-shadow: 0 0 0 0 rgba(99,102,241,0); }
+  50%      { box-shadow: 0 0 0 6px rgba(99,102,241,0.10); }
+}
+/* Animation 2 — Shimmer Sweep */
+@keyframes shimmerSweep {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+/* Entry animation */
+@keyframes cardIn {
+  from { opacity:0; transform:translateY(26px) scale(0.97); }
+  to   { opacity:1; transform:translateY(0)  scale(1);    }
+}
+
+.ep-card {
+  position: relative;
+  overflow: hidden;
+  animation: cardIn .5s cubic-bezier(.22,.68,0,1.2) both,
+             pulseRing 4s ease-in-out infinite;
+}
+.ep-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  background: linear-gradient(
+    108deg, transparent 28%,
+    rgba(255,255,255,0.06) 50%,
+    transparent 72%
+  );
+  background-size: 250% 100%;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .3s ease;
+}
+.ep-card:hover::after {
+  opacity: 1;
+  animation: shimmerSweep 2s ease-in-out infinite;
+}
+`;
+
+/* ─── framer-motion: Float Bob (Animation 3) ────────────────────── */
+const floatVariants = {
+  rest:  { y: 0 },
+  hover: {
+    y: [0, -7, 0],
+    transition: { duration: 2.6, ease: "easeInOut", repeat: Infinity, repeatType: "loop" as const },
+  },
+};
+
+/* ─── EventCard ─────────────────────────────────────────────────── */
+function EventCard({ event, index }: { event: EventItem; index: number }) {
+  const cat = inferCategory(event);
+  const accent = ACCENT_COLOR[cat] ?? "#6366f1";
+  const catColor = CAT_TEXT[cat] ?? "#818cf8";
+  const displayDate = extractDeclaredDate(event.published_at || "") || "Date TBA";
+  const catLabel = cat.charAt(0) + cat.slice(1).toLowerCase();
+
+  return (
+    <motion.a
+      href={event.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="ep-card"
+      variants={floatVariants}
+      initial="rest"
+      whileHover="hover"
+      style={{
+        animationDelay: `${(index % 9) * 0.07}s`,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+        background: "linear-gradient(145deg,#12121a,#0f0f18)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: 14,
+        padding: "20px",
+        textDecoration: "none",
+        cursor: "pointer",
+      }}
+    >
+      {/* Coloured top accent line */}
+      <div style={{
+        position: "absolute", top: 0, left: 0, right: 0,
+        height: 2, background: accent, opacity: 0.85, borderRadius: "14px 14px 0 0",
+      }} />
+
+      {/* Meta */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "rgba(255,255,255,0.3)" }}>
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0 }}>
+            <circle cx="8" cy="8" r="7" /><polyline points="8 4 8 8 11 10" />
+          </svg>
+          {displayDate}
+        </span>
+        <span style={{ width: 3, height: 3, borderRadius: "50%", background: "rgba(255,255,255,0.2)", flexShrink: 0 }} />
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "1.2px", textTransform: "uppercase", color: catColor }}>
+          {catLabel}
+        </span>
+      </div>
+
+      {/* Title — Syne for the editorial punch */}
+      <p style={{
+        fontFamily: "'Syne', sans-serif",
+        fontSize: 15, fontWeight: 700, lineHeight: 1.4,
+        color: "#f0f0f8", margin: 0,
+        display: "-webkit-box", WebkitLineClamp: 3,
+        WebkitBoxOrient: "vertical", overflow: "hidden",
+      }}>
+        {normalizeSpace(event.title || "Untitled event")}
+      </p>
+
+      {/* Summary */}
+      <p style={{
+        fontSize: 12, lineHeight: 1.65,
+        color: "rgba(255,255,255,0.33)", margin: 0,
+        display: "-webkit-box", WebkitLineClamp: 2,
+        WebkitBoxOrient: "vertical", overflow: "hidden",
+      }}>
+        {normalizeSpace(event.summary || "Official update from One Piece Card Game.")}
+      </p>
+
+      {/* Footer */}
+      <div style={{
+        marginTop: "auto", display: "flex", alignItems: "center",
+        justifyContent: "space-between", paddingTop: 10,
+        borderTop: "1px solid rgba(255,255,255,0.05)",
+      }}>
+        <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: "1px", textTransform: "uppercase", color: "rgba(99,102,241,0.7)", display: "flex", alignItems: "center", gap: 4 }}>
+          Read more
+          <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5">
+            <polyline points="3 8 13 8" /><polyline points="9 4 13 8 9 12" />
+          </svg>
+        </span>
+        <span style={{ fontSize: 10, color: "rgba(255,255,255,0.13)", letterSpacing: ".5px", textTransform: "uppercase" }}>
+          {cat}
+        </span>
+      </div>
+    </motion.a>
+  );
+}
+
+/* ─── Main Component ────────────────────────────────────────────── */
 export function Events() {
-  const [status, setStatus] = useState<WatcherStatus | null>(null);
-  const [events, setEvents] = useState<WatchedEvent[]>([]);
-  const [visibleCount, setVisibleCount] = useState(30);
+  const [events, setEvents] = useState<EventItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState<"run" | "email" | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<CategoryTab>("ALL");
   const [error, setError] = useState<string | null>(null);
+  const cssRef = useRef(false);
+
+  useEffect(() => {
+    if (cssRef.current) return;
+    cssRef.current = true;
+    const el = document.createElement("style");
+    el.id = "ep-global-css";
+    el.textContent = GLOBAL_CSS;
+    document.head.appendChild(el);
+    return () => { document.getElementById("ep-global-css")?.remove(); };
+  }, []);
 
   const loadData = async () => {
     try {
       setLoading(true);
       setError(null);
-
-      const [statusRes, recentPrimary] = await Promise.all([
-        fetch(withApiBase("/watcher/status")),
-        fetch(withApiBase("/watcher/recent?limit=all")),
-      ]);
-
-      const recentRes =
-        recentPrimary.status === 404
-          ? await fetch(withApiBase("/watcher.js/recent?limit=all"))
-          : recentPrimary;
-
-      const [statusJson, recentJson] = await Promise.all([
-        statusRes.json().catch(() => ({})),
-        recentRes.json().catch(() => ({})),
-      ]);
-
-      if (!statusRes.ok) {
-        throw new Error((statusJson as { message?: string }).message || "Failed to load watcher status.");
-      }
-      if (!recentRes.ok) {
-        throw new Error((recentJson as { message?: string }).message || "Failed to load watcher events.");
-      }
-
-      setStatus(statusJson as WatcherStatus);
-      setEvents(Array.isArray((recentJson as { events?: WatchedEvent[] }).events) ? (recentJson as { events: WatchedEvent[] }).events : []);
-      setVisibleCount(30);
-      setMessage(null);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Failed to load events.");
+      const primary = await fetch(withApiBase("/watcher/recent?limit=all"));
+      const response = primary.status === 404
+        ? await fetch(withApiBase("/watcher.js/recent?limit=all"))
+        : primary;
+      const body = (await response.json().catch(() => ({}))) as { events?: EventItem[]; message?: string };
+      if (!response.ok) throw new Error(body.message || "Failed to fetch events.");
+      setEvents(Array.isArray(body.events) ? body.events : []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch events.");
+      setEvents([]);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    void loadData();
-  }, []);
+  useEffect(() => { void loadData(); }, []);
 
-  const runWatcherAction = async (path: "/watcher/run-now" | "/watcher/test-email", mode: "run" | "email") => {
-    try {
-      setActionLoading(mode);
-      setError(null);
-      const response = await fetch(withApiBase(path), { method: "POST" });
-      const data = (await response.json().catch(() => ({}))) as WatcherActionResponse;
-      if (!response.ok) {
-        throw new Error(data.message || data.error || "Watcher action failed.");
-      }
-      if (data.status) setStatus(data.status);
-      setMessage(data.message || (mode === "run" ? "Watcher run completed." : "Test email sent."));
-      await loadData();
-    } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "Watcher action failed.");
-    } finally {
-      setActionLoading(null);
-    }
-  };
+  const sortedEvents = useMemo(() =>
+    [...events].sort((a, b) => {
+      const aS = extractDeclaredDate(a.published_at || "") || `${a.title} ${a.summary}`;
+      const bS = extractDeclaredDate(b.published_at || "") || `${b.title} ${b.summary}`;
+      return parseDateForSort(bS) - parseDateForSort(aS);
+    }), [events]);
 
-  const statusTone = status?.running
-    ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-    : "bg-slate-100 text-slate-700 border-slate-300";
-
-  const visibleEvents = useMemo(() => events.slice(0, visibleCount), [events, visibleCount]);
+  const visibleEvents = useMemo(() =>
+    activeTab === "ALL" ? sortedEvents : sortedEvents.filter(e => inferCategory(e) === activeTab),
+    [activeTab, sortedEvents]);
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <div className="inline-flex items-center gap-2 rounded-full bg-orange-100 px-4 py-2">
-          <Siren className="h-4 w-4 text-orange-700" />
-          <span className="text-sm font-semibold text-orange-900">Official Watcher + Mail Alerts</span>
-        </div>
-        <h2 className="text-3xl font-bold text-gray-900">Events</h2>
-        <p className="max-w-3xl text-sm text-gray-700">
-          Official One Piece topics watcher, latest detected events, and email alert controls from the backend watcher API.
-        </p>
+    <section style={{ background: "#0a0a0f", borderRadius: 16, padding: "28px 24px 36px" }}>
+
+      {/* ── Header ──────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 28, gap: 12, flexWrap: "wrap" }}>
+        <h2 style={{
+          fontFamily: "'Syne', sans-serif", fontSize: 38,
+          fontWeight: 800, letterSpacing: -1, color: "#fff",
+          lineHeight: 1, margin: 0,
+        }}>
+          Latest<br /><span style={{ color: "#6366f1" }}>Information</span>
+        </h2>
+        <button
+          onClick={() => void loadData()}
+          disabled={loading}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 7,
+            background: "transparent", border: "1px solid rgba(255,255,255,0.15)",
+            color: "rgba(255,255,255,0.7)", fontFamily: "'Inter',sans-serif",
+            fontSize: 11, fontWeight: 600, letterSpacing: "1.5px",
+            textTransform: "uppercase", padding: "9px 18px",
+            borderRadius: 8, cursor: "pointer",
+          }}
+        >
+          <RefreshCw
+            style={{ width: 13, height: 13 }}
+            className={loading ? "animate-spin" : ""}
+          />
+          {loading ? "Refreshing" : "Refresh"}
+        </button>
       </div>
 
-      {(message || error) && (
-        <Card className={`${error ? "border-red-300 bg-red-50" : "border-emerald-300 bg-emerald-50"} p-4`}>
-          <div className="flex items-start gap-3">
-            <AlertCircle className={`mt-0.5 h-5 w-5 ${error ? "text-red-600" : "text-emerald-600"}`} />
-            <div>
-              <p className={`font-semibold ${error ? "text-red-900" : "text-emerald-900"}`}>
-                {error ? "Watcher Error" : "Watcher Status"}
-              </p>
-              <p className={`text-sm ${error ? "text-red-700" : "text-emerald-700"}`}>{error || message}</p>
-            </div>
-          </div>
-        </Card>
+      {/* ── Tabs ─────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, overflowX: "auto", scrollbarWidth: "none", marginBottom: 28, flexWrap: "nowrap" }}>
+        {TABS.map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            style={{
+              background: activeTab === tab ? "rgba(99,102,241,0.9)" : "rgba(255,255,255,0.05)",
+              border: `1px solid ${activeTab === tab ? "#6366f1" : "rgba(255,255,255,0.08)"}`,
+              color: activeTab === tab ? "#fff" : "rgba(255,255,255,0.45)",
+              fontFamily: "'Inter',sans-serif", fontSize: 11, fontWeight: 600,
+              letterSpacing: ".8px", textTransform: "uppercase",
+              padding: "7px 14px", borderRadius: 6,
+              cursor: "pointer", whiteSpace: "nowrap",
+              transition: "all .2s",
+            }}
+          >
+            {tab.charAt(0) + tab.slice(1).toLowerCase()}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Error ───────────────────────────────── */}
+      {error && (
+        <div style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.25)", color: "#fca5a5", fontSize: 12, padding: "10px 14px", borderRadius: 8, marginBottom: 14 }}>
+          {error}
+        </div>
       )}
 
-      <Card className="border-2 border-orange-200 bg-gradient-to-br from-orange-50 to-amber-50 p-6">
-        <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-          <div className="grid flex-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-white/80 bg-white/80 p-4">
-              <div className="mb-2 flex items-center gap-2">
-                <Activity className="h-4 w-4 text-orange-600" />
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Watcher</p>
-              </div>
-              <Badge className={statusTone}>{status?.running ? "Running" : "Idle"}</Badge>
-            </div>
-
-            <div className="rounded-2xl border border-white/80 bg-white/80 p-4">
-              <div className="mb-2 flex items-center gap-2">
-                <Clock className="h-4 w-4 text-blue-600" />
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Last Run</p>
-              </div>
-              <p className="text-sm font-semibold text-gray-900">{formatTimestamp(status?.last_run_at)}</p>
-            </div>
-
-            <div className="rounded-2xl border border-white/80 bg-white/80 p-4">
-              <div className="mb-2 flex items-center gap-2">
-                <Hash className="h-4 w-4 text-purple-600" />
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">New Events</p>
-              </div>
-              <p className="text-2xl font-bold text-gray-900">{status?.last_new_count ?? 0}</p>
-            </div>
-
-            <div className="rounded-2xl border border-white/80 bg-white/80 p-4">
-              <div className="mb-2 flex items-center gap-2">
-                <Timer className="h-4 w-4 text-emerald-600" />
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Interval</p>
-              </div>
-              <p className="text-sm font-semibold text-gray-900">
-                {status?.interval_ms ? `${Math.round(status.interval_ms / 60000)} min` : "N/A"}
-              </p>
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-3 xl:w-[360px]">
-            <Button
-              variant="outline"
-              onClick={() => void loadData()}
-              disabled={loading || actionLoading !== null}
-              className="justify-center border-orange-300 bg-white text-orange-900 hover:bg-orange-100"
-            >
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-              {loading ? "Refreshing" : "Refresh"}
-            </Button>
-            <Button
-              onClick={() => void runWatcherAction("/watcher/run-now", "run")}
-              disabled={loading || actionLoading !== null}
-              className="justify-center bg-orange-600 text-white hover:bg-orange-700"
-            >
-              <Activity className={`h-4 w-4 ${actionLoading === "run" ? "animate-pulse" : ""}`} />
-              {actionLoading === "run" ? "Running" : "Run Now"}
-            </Button>
-            <Button
-              onClick={() => void runWatcherAction("/watcher/test-email", "email")}
-              disabled={loading || actionLoading !== null}
-              className="justify-center bg-slate-900 text-white hover:bg-slate-800"
-            >
-              <Mail className={`h-4 w-4 ${actionLoading === "email" ? "animate-pulse" : ""}`} />
-              {actionLoading === "email" ? "Sending" : "Test Email"}
-            </Button>
-          </div>
+      {/* ── Empty ───────────────────────────────── */}
+      {visibleEvents.length === 0 && !loading && (
+        <div style={{ padding: 48, textAlign: "center", fontSize: 13, color: "rgba(255,255,255,0.2)", border: "1px dashed rgba(255,255,255,0.08)", borderRadius: 12 }}>
+          No events found for this category.
         </div>
+      )}
 
-        <div className="mt-5 grid gap-4 md:grid-cols-3">
-          <div className="rounded-2xl border border-white/80 bg-white/80 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Last Email Sent</p>
-            <p className="mt-2 text-sm font-semibold text-gray-900">{formatTimestamp(status?.last_email_sent_at)}</p>
-          </div>
-          <div className="rounded-2xl border border-white/80 bg-white/80 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Email Reason</p>
-            <p className="mt-2 text-sm font-semibold text-gray-900">{status?.last_email_reason || "N/A"}</p>
-          </div>
-          <div className="rounded-2xl border border-white/80 bg-white/80 p-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Last Error</p>
-            <p className="mt-2 text-sm font-semibold text-red-700">{status?.last_error || status?.last_email_error || "None"}</p>
-          </div>
-        </div>
-      </Card>
+      {/* ── Cards grid ──────────────────────────── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0,1fr))", gap: 16 }}>
+        {visibleEvents.map((event, i) => (
+          <EventCard key={`${event.url}-${i}`} event={event} index={i} />
+        ))}
+      </div>
 
-      <Card className="border-2 border-slate-200 bg-white p-6">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <h3 className="text-xl font-bold text-gray-900">Recent Detected Events</h3>
-            <p className="text-sm text-gray-600">{events.length > 0 ? `${events.length} total events` : "No events detected yet"}</p>
-          </div>
-          <Badge className="bg-blue-100 text-blue-800 border-blue-300">{events.length} tracked</Badge>
-        </div>
-
-        {visibleEvents.length === 0 ? (
-          <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-12 text-center text-sm text-slate-600">
-            No events available right now. Try running the watcher or refreshing.
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {visibleEvents.map((event) => {
-              const tag = getTag(event.title);
-              const displayDate = extractDisplayDate(event);
-
-              return (
-                <div
-                  key={event.url}
-                  className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm"
-                >
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="space-y-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-base font-semibold text-gray-900">
-                          {cleanTitle(event.title || event.url)}
-                        </p>
-                        <Badge className={getTagClassName(tag)}>{tag}</Badge>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
-                        {displayDate ? (
-                          <span className="inline-flex items-center gap-1">
-                            <Clock className="h-3.5 w-3.5" />
-                            {displayDate}
-                          </span>
-                        ) : null}
-                        {event.first_seen_at ? (
-                          <span className="inline-flex items-center gap-1">
-                            <Activity className="h-3.5 w-3.5" />
-                            Seen: {formatTimestamp(event.first_seen_at)}
-                          </span>
-                        ) : null}
-                        {event.last_notified_at ? (
-                          <span className="inline-flex items-center gap-1">
-                            <Mail className="h-3.5 w-3.5" />
-                            Notified: {formatTimestamp(event.last_notified_at)}
-                          </span>
-                        ) : null}
-                      </div>
-
-                      {event.summary && event.summary !== "-" ? (
-                        <p className="text-sm leading-6 text-gray-700">{event.summary}</p>
-                      ) : null}
-                    </div>
-
-                    <a
-                      href={event.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm font-medium text-blue-700 underline-offset-4 hover:underline"
-                    >
-                      Open source
-                    </a>
-                  </div>
-                </div>
-              );
-            })}
-
-            {visibleCount < events.length ? (
-              <Button
-                variant="outline"
-                onClick={() => setVisibleCount((current) => current + 30)}
-                className="w-full border-slate-300 bg-white text-slate-900 hover:bg-slate-100"
-              >
-                Load More ({events.length - visibleCount} remaining)
-              </Button>
-            ) : null}
-          </div>
-        )}
-      </Card>
-    </div>
+    </section>
   );
 }
